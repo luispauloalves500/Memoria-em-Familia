@@ -1,9 +1,11 @@
-# Memórias em Família — v1.6.0
+# Memórias em Família — v1.8.0
 
 Site/PWA responsivo para organizar fotos pessoais e familiares com visual profissional.
 
 ## O que já funciona
 
+- Capas visuais para os álbuns, com capa dinâmica para álbuns com fotos e capa estilizada para álbuns vazios
+- Banner principal na página inicial com destaque visual para fotos recentes e atalhos rápidos
 - Melhoria visual premium com layout mais elegante, cartões refinados, hero aprimorado e interface mais moderna
 - Upload múltiplo de imagens pela galeria, câmera ou arrastar/soltar
 - Aceita JPG/JPEG/JFIF, PNG, WebP, AVIF, GIF, BMP e armazena HEIC/HEIF quando selecionados pelo navegador

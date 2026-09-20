@@ -204,21 +204,87 @@ function renderEmpty(title, text, actionLabel='Enviar fotos', action='upload') {
   </div>`;
 }
 
+function renderHeroBanner(photos, favoritesCount=0) {
+  const picks = photos.slice(0, 5);
+  const main = picks[0];
+  const secondary = picks.slice(1, 5);
+  const album = main ? getAlbum(main.albumId) : null;
+
+  if (!main) {
+    return `
+      <div class="hero-banner-card empty">
+        <div class="hero-banner-empty">
+          <span>✦</span>
+          <strong>Seu banner vai aparecer aqui</strong>
+          <p>Envie fotos para destacar seus melhores momentos logo na entrada do site.</p>
+        </div>
+      </div>`;
+  }
+
+  const chips = [
+    `${photos.length} ${photos.length === 1 ? 'foto' : 'fotos'}`,
+    `${state.albums.length} ${state.albums.length === 1 ? 'álbum' : 'álbuns'}`,
+    `${favoritesCount} ${favoritesCount === 1 ? 'favorita' : 'favoritas'}`,
+  ];
+
+  return `
+    <div class="hero-banner-card">
+      <article class="hero-banner-main" data-photo-id="${main.id}">
+        ${photoVisual(main, {thumbnail:false, alt: main.name || 'Foto em destaque'})}
+        <div class="hero-banner-overlay"></div>
+        <div class="hero-banner-content">
+          <div class="hero-banner-pill">Destaque da galeria</div>
+          <strong>${escapeHtml(main.name || 'Foto em destaque')}</strong>
+          <span>${album ? escapeHtml(album.name) + ' · ' : ''}${formatDate(main.createdAt)}</span>
+          <div class="hero-banner-chipbar">
+            ${chips.map(chip => `<span>${escapeHtml(chip)}</span>`).join('')}
+          </div>
+        </div>
+      </article>
+      <div class="hero-banner-thumbs">
+        ${secondary.map(photo => {
+          const subAlbum = getAlbum(photo.albumId);
+          return `
+            <article class="hero-thumb" data-photo-id="${photo.id}">
+              ${photoVisual(photo, {thumbnail:true, alt: photo.name || 'Miniatura'})}
+              <div class="hero-thumb-overlay"></div>
+              <div class="hero-thumb-info">
+                <strong>${escapeHtml(photo.name || 'Foto')}</strong>
+                <span>${subAlbum ? escapeHtml(subAlbum.name) : formatDate(photo.createdAt)}</span>
+              </div>
+            </article>`;
+        }).join('')}
+      </div>
+    </div>`;
+}
+
 function renderHome() {
   const photos = activePhotos();
-  const recent = sorted(photos.filter(photoMatches)).slice(0,10);
+  const filteredPhotos = sorted(photos.filter(photoMatches));
+  const recent = filteredPhotos.slice(0,10);
+  const bannerPhotos = filteredPhotos.slice(0,5);
   const favorites = photos.filter(p=>p.favorite).length;
   const totalBytes = photos.reduce((sum,p)=>sum+(p.size||0),0);
   const albumCards = state.albums.slice(0,4).map(renderAlbumCard).join('');
 
   root.innerHTML = `
-    <section class="hero">
+    <section class="hero hero-split">
       <div class="hero-content">
         <div class="eyebrow">Seu acervo particular</div>
         <h1>Momentos que merecem ficar.</h1>
         <p>Organize, edite e preserve as fotos da família com álbuns, favoritos e uma experiência feita para celular e computador.</p>
-        <button class="btn" data-action="upload">↑ Adicionar novas fotos</button>
+        <div class="hero-actions">
+          <button class="btn" data-action="upload">↑ Adicionar novas fotos</button>
+          <button class="btn ghost hero-secondary" data-view-link="albums">Ver álbuns</button>
+        </div>
+        <div class="hero-benefits">
+          <span>◉ Upload rápido</span>
+          <span>✎ Editor integrado</span>
+          <span>♫ Rádio no site</span>
+          <span>☁ Estrutura pronta para nuvem</span>
+        </div>
       </div>
+      ${renderHeroBanner(bannerPhotos, favorites)}
     </section>
 
     <div class="stats-grid">
@@ -238,15 +304,61 @@ function renderHome() {
 
 function albumPhotoList(albumId) { return activePhotos().filter(p => p.albumId === albumId); }
 
+function albumVisualMeta(album, photos=[]) {
+  const key = `${album?.name || ''} ${album?.description || ''}`.toLowerCase();
+  if (key.includes('viag')) return { icon:'✈', accent:'travel', label:'Álbum de viagem' };
+  if (key.includes('fam')) return { icon:'♥', accent:'family', label:'Álbum da família' };
+  if (key.includes('anivers')) return { icon:'✦', accent:'celebrate', label:'Momentos especiais' };
+  if (key.includes('casa') || key.includes('lar')) return { icon:'⌂', accent:'home', label:'Memórias do lar' };
+  return { icon: photos.length ? '◫' : '▣', accent:'default', label: photos.length ? 'Coleção de memórias' : 'Pronto para receber fotos' };
+}
+
+function albumCoverMarkup(album, photos) {
+  const meta = albumVisualMeta(album, photos);
+  if (!photos.length) {
+    const initials = (album.name || 'Álbum').split(/\s+/).slice(0,2).map(s=>s[0]||'').join('').toUpperCase();
+    return `
+      <div class="album-cover-empty ${meta.accent}">
+        <div class="album-cover-empty-art"></div>
+        <div class="album-cover-empty-badge">${meta.label}</div>
+        <div class="album-cover-empty-center">
+          <div class="album-cover-empty-icon">${meta.icon}</div>
+          <strong>${escapeHtml(initials || 'AL')}</strong>
+          <span>${escapeHtml(album.description || 'Adicione fotos para formar a capa deste álbum.')}</span>
+        </div>
+      </div>`;
+  }
+  const cover = photos.find(p=>p.favorite) || photos[0];
+  const thumbs = photos.filter(p => p.id !== cover.id).slice(0,3);
+  return `
+    <div class="album-cover-photo-layout">
+      <div class="album-cover-main">
+        ${photoVisual(cover,{thumbnail:true,alt:cover.name || album.name || 'Capa do álbum'})}
+        <div class="album-cover-main-overlay"></div>
+        <div class="album-cover-main-meta">
+          <span>${meta.label}</span>
+          <strong>${escapeHtml(cover.name || 'Foto em destaque')}</strong>
+        </div>
+      </div>
+      <div class="album-cover-side ${thumbs.length ? '' : 'empty'}">
+        ${thumbs.map(p => `<div class="album-cover-thumb">${photoVisual(p,{thumbnail:true,alt:p.name || 'Miniatura do álbum'})}</div>`).join('')}
+        ${thumbs.length < 3 ? `<div class="album-cover-thumb album-cover-thumb-fill ${meta.accent}"><span>${meta.icon}</span></div>`.repeat(3-thumbs.length) : ''}
+      </div>
+      <div class="album-cover-counter">${photos.length} ${photos.length === 1 ? 'foto' : 'fotos'}</div>
+    </div>`;
+}
+
 function renderAlbumCard(album) {
   const photos = albumPhotoList(album.id);
-  const covers = photos.slice(0,4);
   return `
-    <article class="album-card" data-album-id="${album.id}">
+    <article class="album-card album-card-enhanced" data-album-id="${album.id}">
       <div class="album-cover">
-        ${covers.length ? covers.map(p=>photoVisual(p,{thumbnail:true,alt:''})).join('') : '<div class="album-placeholder">▣</div>'}
+        ${albumCoverMarkup(album, photos)}
       </div>
-      <div class="album-body"><strong>${escapeHtml(album.name)}</strong><span>${photos.length} ${photos.length === 1 ? 'foto' : 'fotos'}${album.description ? ' · '+escapeHtml(album.description) : ''}</span></div>
+      <div class="album-body">
+        <strong>${escapeHtml(album.name)}</strong>
+        <span>${photos.length} ${photos.length === 1 ? 'foto' : 'fotos'}${album.description ? ' · '+escapeHtml(album.description) : ''}</span>
+      </div>
     </article>`;
 }
 
