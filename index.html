@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#111827" />
+  <meta name="description" content="Memórias em Família — galeria privada para organizar, preservar e rever suas fotos." />
+  <title>Memórias em Família</title>
+  <link rel="icon" href="assets/icons/favicon.svg" type="image/svg+xml" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">MF</div>
+        <div>
+          <strong>Memórias</strong>
+          <span>em Família</span>
+        </div>
+      </div>
+
+      <nav class="nav" aria-label="Navegação principal">
+        <button class="nav-item active" data-view="home"><span>⌂</span> Início</button>
+        <button class="nav-item" data-view="photos"><span>▦</span> Fotos</button>
+        <button class="nav-item" data-view="albums"><span>▣</span> Álbuns</button>
+        <button class="nav-item" data-view="favorites"><span>♡</span> Favoritos</button>
+        <button class="nav-item" id="radioBrowseBtn" type="button"><span>♪</span> Rádio</button>
+        <button class="nav-item" data-view="trash"><span>⌫</span> Lixeira</button>
+      </nav>
+
+      <div class="sidebar-bottom">
+        <div class="privacy-card">
+          <div class="privacy-icon">🔒</div>
+          <div>
+            <strong>Privacidade primeiro</strong>
+            <p>No modo local, suas fotos ficam neste dispositivo.</p>
+          </div>
+        </div>
+        <button class="nav-item secondary" id="settingsBtn"><span>⚙</span> Configurações</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <button class="icon-btn mobile-only" id="menuBtn" aria-label="Abrir menu">☰</button>
+        <div class="search-wrap">
+          <span>⌕</span>
+          <input id="searchInput" type="search" placeholder="Buscar por nome, álbum ou tag..." autocomplete="off" />
+        </div>
+        <div class="top-actions">
+          <button class="btn ghost" id="newAlbumBtn">+ Álbum</button>
+          <button class="btn primary" id="uploadBtn">↑ Enviar fotos</button>
+        </div>
+      </header>
+
+      <section class="content" id="viewRoot" aria-live="polite"></section>
+    </main>
+  </div>
+
+  <input id="fileInput" type="file" accept="image/*,.jpg,.jpeg,.jfif,.png,.webp,.avif,.gif,.bmp,.heic,.heif" multiple hidden />
+  <input id="cameraInput" type="file" accept="image/*" capture="environment" hidden />
+
+  <dialog id="albumDialog" class="dialog">
+    <form method="dialog" class="dialog-card" id="albumForm">
+      <button class="dialog-close" value="cancel" aria-label="Fechar">×</button>
+      <div class="dialog-head">
+        <div class="dialog-icon">▣</div>
+        <div>
+          <h2>Novo álbum</h2>
+          <p>Organize suas fotos por momentos, pessoas ou viagens.</p>
+        </div>
+      </div>
+      <label>
+        Nome do álbum
+        <input id="albumName" maxlength="60" placeholder="Ex.: Férias 2026" required />
+      </label>
+      <label>
+        Descrição
+        <textarea id="albumDescription" maxlength="180" placeholder="Uma breve descrição do álbum"></textarea>
+      </label>
+      <div class="dialog-actions">
+        <button class="btn ghost" value="cancel">Cancelar</button>
+        <button class="btn primary" id="saveAlbumBtn" value="default">Criar álbum</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="uploadDialog" class="dialog wide">
+    <form method="dialog" class="dialog-card" id="uploadForm">
+      <button class="dialog-close" value="cancel" aria-label="Fechar">×</button>
+      <div class="dialog-head">
+        <div class="dialog-icon">↑</div>
+        <div>
+          <h2>Enviar fotos</h2>
+          <p>Adicione uma ou várias imagens à sua coleção.</p>
+        </div>
+      </div>
+
+      <div class="upload-source-actions">
+        <button class="btn primary" type="button" id="chooseGalleryBtn">▦ Escolher da galeria</button>
+        <button class="btn ghost" type="button" id="takePhotoBtn">◎ Usar câmera</button>
+      </div>
+
+      <div class="upload-drop" id="dropZone" tabindex="0">
+        <strong>Arraste suas fotos aqui</strong>
+        <span>ou toque aqui para escolher mais imagens</span>
+        <small>JPG, JPEG, PNG, WebP, AVIF e formatos aceitos pelo navegador. HEIC/HEIF também podem ser armazenados quando selecionados.</small>
+      </div>
+
+      <div class="upload-summary" id="uploadSummary">Nenhuma foto selecionada.</div>
+      <div id="uploadPreview" class="upload-preview empty">Nenhum arquivo selecionado.</div>
+
+      <div class="upload-progress" id="uploadProgress" hidden>
+        <div><span id="uploadProgressText">Preparando fotos…</span><strong id="uploadProgressPercent">0%</strong></div>
+        <progress id="uploadProgressBar" max="100" value="0"></progress>
+      </div>
+
+      <div class="form-grid">
+        <label>
+          Álbum
+          <select id="uploadAlbum"></select>
+        </label>
+        <label>
+          Tags
+          <input id="uploadTags" placeholder="família, viagem, aniversário" />
+        </label>
+      </div>
+
+      <div class="dialog-actions">
+        <button class="btn ghost" value="cancel">Cancelar</button>
+        <button class="btn primary" id="confirmUploadBtn" value="default">Salvar fotos</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="settingsDialog" class="dialog">
+    <form method="dialog" class="dialog-card">
+      <button class="dialog-close" value="cancel" aria-label="Fechar">×</button>
+      <div class="dialog-head">
+        <div class="dialog-icon">⚙</div>
+        <div>
+          <h2>Configurações</h2>
+          <p>Personalização, backup e informações do armazenamento.</p>
+        </div>
+      </div>
+
+      <div class="settings-row">
+        <div>
+          <strong>Tema escuro</strong>
+          <p>Alterna a aparência do site neste dispositivo.</p>
+        </div>
+        <button type="button" class="switch" id="themeSwitch" aria-pressed="false"><span></span></button>
+      </div>
+
+      <div class="settings-row stack">
+        <div>
+          <strong>Backup de metadados</strong>
+          <p>Exporte álbuns, nomes, tags e favoritos em JSON.</p>
+        </div>
+        <button type="button" class="btn ghost" id="exportBtn">Exportar backup</button>
+      </div>
+
+      <div class="settings-row stack">
+        <div>
+          <strong>Modo atual</strong>
+          <p>Local / IndexedDB. Ideal para teste e uso em um único dispositivo. Para família e vários aparelhos, conecte o backend privado descrito no guia do projeto.</p>
+        </div>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="lightbox" class="lightbox-dialog">
+    <button class="lightbox-close" id="lightboxClose" aria-label="Fechar">×</button>
+    <button class="lightbox-nav prev" id="lightboxPrev" aria-label="Foto anterior">‹</button>
+    <figure class="lightbox-frame">
+      <img id="lightboxImage" alt="" />
+      <figcaption>
+        <div>
+          <strong id="lightboxTitle"></strong>
+          <span id="lightboxMeta"></span>
+        </div>
+        <div class="lightbox-actions">
+          <button class="btn ghost light" id="lightboxFavorite">♡ Favoritar</button>
+          <button class="btn ghost light" id="lightboxEdit">✎ Editar</button>
+          <button class="btn ghost light" id="lightboxDownload">↓ Baixar</button>
+          <button class="btn danger light" id="lightboxDelete">Excluir</button>
+        </div>
+      </figcaption>
+    </figure>
+    <button class="lightbox-nav next" id="lightboxNext" aria-label="Próxima foto">›</button>
+  </dialog>
+
+
+  <dialog id="editorDialog" class="dialog editor-dialog">
+    <form method="dialog" class="dialog-card editor-card" id="editorForm">
+      <button class="dialog-close" value="cancel" aria-label="Fechar">×</button>
+      <div class="dialog-head">
+        <div class="dialog-icon">✎</div>
+        <div>
+          <h2>Editar foto</h2>
+          <p>Mude o formato, preencha áreas vazias e faça ajustes. A foto original permanece intacta.</p>
+        </div>
+      </div>
+
+      <div class="editor-layout">
+        <div class="editor-stage-wrap">
+          <div class="editor-stage" id="editorStage">
+            <canvas id="editorCanvas" aria-label="Pré-visualização da edição"></canvas>
+            <div class="editor-loading" id="editorLoading">Carregando foto…</div>
+          </div>
+          <div class="editor-quick-actions">
+            <button type="button" class="chip" id="rotateLeftBtn">↶ Girar</button>
+            <button type="button" class="chip" id="rotateRightBtn">↷ Girar</button>
+            <button type="button" class="chip" id="flipHBtn">↔ Espelhar</button>
+            <button type="button" class="chip" id="flipVBtn">↕ Inverter</button>
+            <button type="button" class="chip" id="resetEditBtn">↺ Restaurar ajustes</button>
+          </div>
+        </div>
+
+        <aside class="editor-controls">
+          <label>
+            Formato / orientação
+            <select id="cropAspect">
+              <option value="original">Original</option>
+              <option value="1">Quadrado 1:1</option>
+              <option value="1.333333">Paisagem 4:3</option>
+              <option value="1.777778">Paisagem 16:9</option>
+              <option value="0.8">Retrato 4:5</option>
+              <option value="0.75">Retrato 3:4</option>
+              <option value="0.5625">Retrato 9:16</option>
+            </select>
+          </label>
+          <label>
+            Preenchimento da orientação
+            <select id="frameMode">
+              <option value="blur">Fundo desfocado — preserva a foto inteira</option>
+              <option value="crop">Recortar para preencher</option>
+              <option value="solid">Fundo neutro</option>
+              <option value="extend">Preenchimento inteligente — amplia as bordas</option>
+            </select>
+          </label>
+          <label class="range-control" id="fillBlurControl">
+            <span>Desfoque do fundo <output id="fillBlurOut">28px</output></span>
+            <input id="fillBlur" type="range" min="8" max="60" value="28" />
+          </label>
+          <label class="range-control">
+            <span>Posição horizontal <output id="cropXOut">50%</output></span>
+            <input id="cropX" type="range" min="0" max="100" value="50" />
+          </label>
+          <label class="range-control">
+            <span>Posição vertical <output id="cropYOut">50%</output></span>
+            <input id="cropY" type="range" min="0" max="100" value="50" />
+          </label>
+          <label class="range-control">
+            <span>Brilho <output id="brightnessOut">100%</output></span>
+            <input id="brightness" type="range" min="50" max="150" value="100" />
+          </label>
+          <label class="range-control">
+            <span>Contraste <output id="contrastOut">100%</output></span>
+            <input id="contrast" type="range" min="50" max="150" value="100" />
+          </label>
+          <label class="range-control">
+            <span>Saturação <output id="saturationOut">100%</output></span>
+            <input id="saturation" type="range" min="0" max="200" value="100" />
+          </label>
+          <label class="range-control">
+            <span>Preto e branco <output id="grayscaleOut">0%</output></span>
+            <input id="grayscale" type="range" min="0" max="100" value="0" />
+          </label>
+          <div class="editor-note">
+            <strong>Edição segura</strong>
+            <span>Ao salvar, o site cria uma nova imagem editada no mesmo álbum e mantém a original disponível.</span>
+          </div>
+        </aside>
+      </div>
+
+      <div class="dialog-actions editor-actions">
+        <button class="btn ghost" value="cancel">Cancelar</button>
+        <button class="btn primary" type="button" id="saveEditBtn">Salvar cópia editada</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="radioDialog" class="dialog wide radio-dialog">
+    <form method="dialog" class="dialog-card">
+      <button class="dialog-close" value="cancel" aria-label="Fechar">×</button>
+      <div class="dialog-head">
+        <div class="dialog-icon">♪</div>
+        <div>
+          <h2>Rádio enquanto você relembra</h2>
+          <p>Escolha uma estação e continue navegando pelas fotos normalmente.</p>
+        </div>
+      </div>
+
+      <div class="radio-search">
+        <input id="radioSearchInput" type="search" placeholder="Buscar uma rádio brasileira..." autocomplete="off" />
+        <button class="btn primary" type="button" id="radioSearchBtn">Buscar</button>
+      </div>
+      <div class="radio-list-head">
+        <strong>Estações</strong>
+        <span id="radioListStatus">Carregando estações...</span>
+      </div>
+      <div class="radio-station-list" id="radioStationList" aria-live="polite"></div>
+
+      <details class="radio-manual">
+        <summary>Adicionar rádio por endereço do stream</summary>
+        <div class="radio-manual-grid">
+          <label>
+            Nome da rádio
+            <input id="radioManualName" placeholder="Ex.: Minha rádio" maxlength="70" />
+          </label>
+          <label>
+            URL HTTPS do áudio
+            <input id="radioManualUrl" type="url" placeholder="https://.../stream" />
+          </label>
+        </div>
+        <button class="btn ghost" type="button" id="radioManualAddBtn">Adicionar e tocar</button>
+      </details>
+    </form>
+  </dialog>
+
+  <audio id="radioAudio" preload="none"></audio>
+  <section class="radio-dock" id="radioDock" aria-label="Player de rádio">
+    <button class="radio-collapse" id="radioCollapseBtn" type="button" aria-label="Recolher player">⌄</button>
+    <button class="radio-station-summary" id="radioOpenBtn" type="button" aria-label="Escolher estação">
+      <span class="radio-logo-wrap">
+        <img id="radioLogo" alt="" hidden />
+        <span id="radioLogoFallback">♪</span>
+      </span>
+      <span class="radio-meta">
+        <strong id="radioTitle">Escolha uma rádio</strong>
+        <small id="radioStatus">Toque aqui para selecionar uma estação</small>
+      </span>
+    </button>
+    <div class="radio-controls">
+      <button class="radio-icon-btn" id="radioPrevBtn" type="button" aria-label="Rádio anterior">‹</button>
+      <button class="radio-play-btn" id="radioPlayBtn" type="button" aria-label="Tocar rádio">▶</button>
+      <button class="radio-icon-btn" id="radioNextBtn" type="button" aria-label="Próxima rádio">›</button>
+    </div>
+    <div class="radio-volume">
+      <span aria-hidden="true">🔊</span>
+      <input id="radioVolume" type="range" min="0" max="100" value="70" aria-label="Volume da rádio" />
+    </div>
+    <button class="btn ghost radio-stations-btn" id="radioStationsBtn" type="button">Estações</button>
+  </section>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="app.js" defer></script>
+</body>
+</html>

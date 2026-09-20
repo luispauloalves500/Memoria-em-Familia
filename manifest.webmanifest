@@ -1,0 +1,12 @@
+{
+  "name": "Memórias em Família",
+  "short_name": "Memórias",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f6f7fb",
+  "theme_color": "#111827",
+  "description": "Galeria privada para organizar e preservar fotos da família.",
+  "icons": [
+    {"src":"assets/icons/favicon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}
+  ]
+}
