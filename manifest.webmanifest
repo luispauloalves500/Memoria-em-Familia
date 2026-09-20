@@ -5,8 +5,74 @@
   "display": "standalone",
   "background_color": "#f6f7fb",
   "theme_color": "#111827",
-  "description": "Galeria privada para organizar e preservar fotos da família.",
+  "description": "Cofre privado e criptografado para organizar, editar e rever fotos da família.",
   "icons": [
-    {"src":"assets/icons/favicon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}
+    {
+      "src": "assets/icons/app-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "assets/icons/app-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "assets/icons/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ],
+  "id": "./",
+  "scope": "./",
+  "display_override": [
+    "window-controls-overlay",
+    "standalone"
+  ],
+  "orientation": "any",
+  "categories": [
+    "photo",
+    "lifestyle"
+  ],
+  "shortcuts": [
+    {
+      "name": "Abrir fotos",
+      "short_name": "Fotos",
+      "url": "./?view=photos",
+      "icons": [
+        {
+          "src": "assets/icons/app-icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Abrir álbuns",
+      "short_name": "Álbuns",
+      "url": "./?view=albums",
+      "icons": [
+        {
+          "src": "assets/icons/app-icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Favoritos",
+      "short_name": "Favoritos",
+      "url": "./?view=favorites",
+      "icons": [
+        {
+          "src": "assets/icons/app-icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    }
   ]
 }

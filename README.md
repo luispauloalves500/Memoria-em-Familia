@@ -1,70 +1,78 @@
-# Memórias em Família — v1.8.0
+# Memórias em Família — v2.0.0 Secure
 
-Site/PWA responsivo para organizar fotos pessoais e familiares com visual profissional.
+Galeria/PWA privada para organizar, editar e rever fotos da família. Esta versão transforma o projeto em um **cofre criptografado** e mantém o álbum de casamento com 70 fotos.
 
-## O que já funciona
+## Segurança
 
-- Capas visuais para os álbuns, com capa dinâmica para álbuns com fotos e capa estilizada para álbuns vazios
-- Banner principal na página inicial com destaque visual para fotos recentes e atalhos rápidos
-- Melhoria visual premium com layout mais elegante, cartões refinados, hero aprimorado e interface mais moderna
-- Upload múltiplo de imagens pela galeria, câmera ou arrastar/soltar
-- Aceita JPG/JPEG/JFIF, PNG, WebP, AVIF, GIF, BMP e armazena HEIC/HEIF quando selecionados pelo navegador
-- Geração de miniaturas leves para a galeria
-- Progresso de processamento durante o envio
-- Editor integrado: corte, giro, espelhamento, brilho, contraste, saturação e preto e branco
-- Preenchimento inteligente ao converter foto horizontal em vertical (e vice-versa), com fundo desfocado, fundo neutro, recorte ou ampliação das bordas
-- Conversão horizontal ↔ vertical com preenchimento sem cortar a foto principal
-- Modos de preenchimento: fundo desfocado, recorte para preencher ou fundo neutro
-- Controle da intensidade do desfoque e posicionamento da foto no novo quadro
-- Edição não destrutiva: salva uma nova cópia e preserva a original
-- Armazenamento local em IndexedDB
-- Álbuns
-- Favoritos
-- Busca por nome, álbum e tags
-- Ordenação
-- Lixeira com restauração/exclusão definitiva
-- Visualização em tela cheia com navegação
-- Download do arquivo original
-- Tema claro/escuro
-- PWA instalável
-- Layout responsivo para PC e celular
-- Rádio online integrado com mini player persistente enquanto você navega nas fotos
-- Busca de rádios brasileiras, play/pause, anterior/próxima, volume e player recolhível
-- Última estação e volume lembrados neste dispositivo
-- Opção para adicionar manualmente um stream HTTPS
-- Exportação de metadados em JSON
+- Senha **não fica gravada** no HTML, JavaScript, `localStorage`, manifesto ou repositório.
+- PBKDF2-SHA256 com 350.000 iterações para derivação de chave.
+- AES-256-GCM para as fotos e miniaturas do casamento.
+- As 70 fotos públicas do projeto foram removidas e substituídas por arquivos `.bin` criptografados.
+- Fotos adicionadas pelo navegador também são criptografadas antes de irem para o IndexedDB.
+- Bloqueio manual e bloqueio automático por inatividade.
+- Política CSP restringindo scripts e conteúdo ativo.
+- Consulte `SECURITY.md` para detalhes e troca de senha.
 
+## Galeria e casamento
 
-## Fotos incluídas nesta versão
+- 70 fotos no álbum **Casamento**.
+- Miniaturas reais e leves (as originais só são descriptografadas quando necessário).
+- Banner/carrossel automático na home.
+- Banner interno do álbum.
+- Capa manual com posição, zoom e slideshow automático.
+- Grade e modo **Timeline**.
+- Categorias do casamento: Preparativos, Cerimônia, Noivos, Família, Convidados, Festa e Detalhes.
+- Favoritos, busca, ordenação e lixeira.
+- Seleção múltipla para favoritar, mover ou excluir várias fotos.
+- Renomear álbum, editar descrição, mover fotos e excluir álbuns criados pelo usuário.
 
-- 70 fotos WebP incorporadas ao projeto
-- Álbum automático **Fotos da Família**
-- 70 miniaturas WebP separadas para acelerar a galeria
-- As fotos originais ficam em `assets/family-photos/lote-*`
-- A galeria registra apenas os metadados no IndexedDB; os arquivos incluídos não são duplicados no banco do navegador
-- Fotos incluídas continuam compatíveis com favoritos, lixeira, download e editor
+## Visualização e compartilhamento
 
-## Importante sobre privacidade
+- Lightbox em tela cheia.
+- Slideshow com velocidade configurável e efeito de zoom suave/fade.
+- Gestos de swipe no celular.
+- Pinça e duplo toque para zoom.
+- Informações da foto: arquivo, álbum, resolução, tamanho, formato e data.
+- Compartilhamento de arquivo usando Web Share quando o navegador oferecer suporte.
 
-A versão entregue usa **IndexedDB**, portanto as fotos ficam salvas apenas no navegador/dispositivo onde foram adicionadas. É ótimo para testar e usar localmente, mas **não sincroniza automaticamente entre celulares e computadores**.
+## Editor
 
-Para uma família acessar de vários aparelhos, use um backend privado com autenticação e armazenamento de objetos (por exemplo Supabase, Firebase, Cloudflare R2 + backend próprio ou outro serviço semelhante). Não publique fotos familiares diretamente dentro do repositório do GitHub Pages.
+- Recorte e proporções 1:1, 4:3, 16:9, 4:5, 3:4 e 9:16.
+- Girar e espelhar.
+- Preenchimento desfocado, neutro ou ampliação visual das bordas.
+- Brilho, contraste, saturação e preto e branco.
+- **Auto melhorar**.
+- Redução de ruído.
+- Nitidez.
+- Temperatura de cor.
+- Upscale de saída 2×.
+- Edição não destrutiva: salva uma nova cópia e preserva a original.
 
-## Publicar no GitHub Pages
+## Backup
 
-1. Crie um repositório.
-2. Envie todos os arquivos da raiz deste projeto.
-3. Em Settings > Pages, publique a branch principal pela raiz (`/`).
-4. Abra o endereço gerado pelo GitHub Pages.
+- Exportação de backup criptografado em JSON.
+- Inclui álbuns, favoritos, configurações das fotos e cópias criptografadas das imagens locais.
+- O backup das fotos do casamento pode incluir também os bytes criptografados do cofre.
+- Restauração pelo menu Configurações.
 
-## Observação sobre HEIC/HEIF
+## Rádio
 
-O site permite selecionar e armazenar HEIC/HEIF quando o navegador entrega esses arquivos, mas a visualização e a edição dependem do suporte nativo do navegador. Se o aparelho não conseguir decodificar o formato, a foto continua armazenada e disponível para download, porém aparece sem miniatura.
+- Mini player persistente enquanto navega pelas fotos.
+- Busca de rádios brasileiras por diretório público.
+- Volume, play/pause, anterior/próxima e URL manual HTTPS.
+- O Service Worker não intercepta nem armazena streams externos de rádio.
 
-## Próxima evolução recomendada
+## PWA e desempenho
 
-A versão cloud deve ter login individual para cada familiar, convite por e-mail, grupos/famílias, bucket privado, permissões por álbum, miniaturas otimizadas, backup e sincronização entre dispositivos.
+- Instalável como aplicativo.
+- Ícones próprios em vários tamanhos.
+- Atalhos de Fotos, Álbuns e Favoritos.
+- Service Worker separado por app shell e mídia criptografada.
+- Sem fallback incorreto de `index.html` para imagens ou JavaScript.
+- Streams e APIs externas não entram no cache do PWA.
 
-## Rádio online
+## GitHub Pages
 
-A lista de estações é consultada pelo diretório público Radio Browser em tempo de execução. O áudio vem diretamente da URL informada por cada emissora; por isso uma estação específica pode ficar temporariamente indisponível. Em GitHub Pages, prefira streams HTTPS.
+Envie o conteúdo desta pasta para o repositório e habilite **Settings > Pages**. O GitHub Pages continuará sendo uma hospedagem estática; a proteção das fotos nesta versão vem da criptografia do próprio arquivo, não de uma senha escondida em JavaScript.
+
+**Importante:** não adicione novamente as fotos originais em uma pasta pública do repositório. Use somente `assets/vault/` para o acervo incluído.

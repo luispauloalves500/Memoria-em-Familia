@@ -5,16 +5,39 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="theme-color" content="#111827" />
   <meta name="description" content="Memórias em Família — galeria privada para organizar, preservar e rever suas fotos." />
+  <meta name="referrer" content="no-referrer" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data: https:; media-src https: blob:; connect-src 'self' https:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self';" />
   <title>Memórias em Família</title>
-  <link rel="icon" href="assets/icons/favicon.svg" type="image/svg+xml" />
+  
+  <link rel="icon" href="assets/icons/favicon-32.png" sizes="32x32" type="image/png" />
+  <link rel="icon" href="assets/icons/favicon-16.png" sizes="16x16" type="image/png" />
+  <link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png" />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="stylesheet" href="styles.css" />
 </head>
-<body>
+<body class="vault-locked">
+  <section class="vault-gate" id="vaultGate" aria-labelledby="vaultTitle">
+    <div class="vault-card">
+      <img class="vault-logo" src="assets/icons/app-icon-192.png" alt="" />
+      <div class="vault-badge">🔐 Cofre criptografado</div>
+      <h1 id="vaultTitle">Memórias em Família</h1>
+      <p>Digite a senha para descriptografar o acervo. A senha não fica gravada no código, no navegador ou no repositório.</p>
+      <form id="vaultUnlockForm" class="vault-form">
+        <label for="vaultPassword">Senha do acervo</label>
+        <div class="vault-password-wrap">
+          <input id="vaultPassword" type="password" autocomplete="off" data-lpignore="true" spellcheck="false" required />
+          <button id="vaultTogglePassword" type="button" aria-label="Mostrar ou ocultar senha">◉</button>
+        </div>
+        <button class="btn primary vault-unlock-btn" id="vaultUnlockBtn" type="submit">Desbloquear acervo</button>
+      </form>
+      <div class="vault-status" id="vaultStatus" role="status" aria-live="polite">Proteção AES-256-GCM · chave derivada localmente</div>
+      <small>Sem a senha, os arquivos de foto publicados permanecem criptografados e ilegíveis.</small>
+    </div>
+  </section>
   <div class="app-shell">
     <aside class="sidebar" id="sidebar">
       <div class="brand">
-        <div class="brand-mark" aria-hidden="true">MF</div>
+        <div class="brand-mark" aria-hidden="true"><img src="assets/icons/app-icon-192.png" alt="" /></div>
         <div>
           <strong>Memórias</strong>
           <span>em Família</span>
@@ -39,6 +62,7 @@
           </div>
         </div>
         <button class="nav-item secondary" id="settingsBtn"><span>⚙</span> Configurações</button>
+        <button class="nav-item secondary" id="lockVaultBtn"><span>🔒</span> Bloquear acervo</button>
       </div>
     </aside>
 
@@ -84,6 +108,50 @@
         <button class="btn ghost" value="cancel">Cancelar</button>
         <button class="btn primary" id="saveAlbumBtn" value="default">Criar álbum</button>
       </div>
+    </form>
+  </dialog>
+
+  <dialog id="albumManageDialog" class="dialog">
+    <form method="dialog" class="dialog-card" id="albumManageForm">
+      <button class="dialog-close" value="cancel" aria-label="Fechar">×</button>
+      <div class="dialog-head">
+        <div class="dialog-icon">⚙</div>
+        <div><h2>Gerenciar álbum</h2><p>Renomeie, altere a descrição ou exclua um álbum criado por você.</p></div>
+      </div>
+      <input id="albumManageId" type="hidden" />
+      <label>Nome do álbum<input id="albumManageName" maxlength="60" required /></label>
+      <label>Descrição<textarea id="albumManageDescription" maxlength="180"></textarea></label>
+      <div class="dialog-actions split-actions">
+        <button class="btn danger" type="button" id="deleteAlbumBtn">Excluir álbum</button>
+        <span></span>
+        <button class="btn ghost" value="cancel">Cancelar</button>
+        <button class="btn primary" type="button" id="saveAlbumManageBtn">Salvar alterações</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="movePhotosDialog" class="dialog">
+    <form method="dialog" class="dialog-card">
+      <button class="dialog-close" value="cancel" aria-label="Fechar">×</button>
+      <div class="dialog-head">
+        <div class="dialog-icon">↪</div>
+        <div><h2>Mover fotos</h2><p id="movePhotosCount">Escolha o álbum de destino.</p></div>
+      </div>
+      <label>Álbum de destino<select id="moveAlbumSelect"></select></label>
+      <div class="dialog-actions">
+        <button class="btn ghost" value="cancel">Cancelar</button>
+        <button class="btn primary" type="button" id="confirmMovePhotosBtn">Mover</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="photoInfoDialog" class="dialog">
+    <form method="dialog" class="dialog-card">
+      <button class="dialog-close" value="cancel" aria-label="Fechar">×</button>
+      <div class="dialog-head"><div class="dialog-icon">ⓘ</div><div><h2>Informações da foto</h2><p>Detalhes e organização desta memória.</p></div></div>
+      <div id="photoInfoBody" class="photo-info-panel"></div>
+      <label>Momento do casamento<select id="photoMomentSelect"><option value="">Sem categoria</option><option>Preparativos</option><option>Cerimônia</option><option>Noivos</option><option>Família</option><option>Convidados</option><option>Festa</option><option>Detalhes</option></select></label>
+      <div class="dialog-actions"><button class="btn ghost" value="cancel">Fechar</button><button class="btn primary" type="button" id="savePhotoMomentBtn">Salvar categoria</button></div>
     </form>
   </dialog>
 
@@ -156,17 +224,43 @@
 
       <div class="settings-row stack">
         <div>
-          <strong>Backup de metadados</strong>
-          <p>Exporte álbuns, nomes, tags e favoritos em JSON.</p>
+          <strong>Backup criptografado completo</strong>
+          <p>Exporta álbuns, favoritos, ajustes e todas as fotos adicionadas pelo navegador mantendo os arquivos criptografados.</p>
         </div>
-        <button type="button" class="btn ghost" id="exportBtn">Exportar backup</button>
+        <div class="settings-actions-inline">
+          <button type="button" class="btn ghost" id="exportBtn">Exportar backup</button>
+          <button type="button" class="btn ghost" id="importBackupBtn">Restaurar backup</button>
+        </div>
+        <input id="backupFileInput" type="file" accept="application/json,.json" hidden />
       </div>
 
       <div class="settings-row stack">
         <div>
-          <strong>Modo atual</strong>
-          <p>Local / IndexedDB. Ideal para teste e uso em um único dispositivo. Para família e vários aparelhos, conecte o backend privado descrito no guia do projeto.</p>
+          <strong>Slideshow</strong>
+          <p>Escolha a velocidade e o efeito usado ao apresentar as fotos em tela cheia.</p>
         </div>
+        <div class="form-grid compact-settings">
+          <label>Intervalo<select id="slideshowSpeed"><option value="3000">3 segundos</option><option value="4200" selected>4,2 segundos</option><option value="6000">6 segundos</option><option value="8000">8 segundos</option></select></label>
+          <label>Efeito<select id="slideshowEffect"><option value="kenburns">Zoom suave</option><option value="fade">Fade</option></select></label>
+        </div>
+      </div>
+
+      <div class="settings-row stack">
+        <div>
+          <strong>Segurança do acervo</strong>
+          <p>As fotos do casamento são publicadas somente como arquivos AES-256-GCM criptografados. A senha não está no HTML, JavaScript, manifesto nem no repositório.</p>
+        </div>
+        <label>
+          Bloqueio automático
+          <select id="autoLockMinutes">
+            <option value="5">5 minutos</option>
+            <option value="15" selected>15 minutos</option>
+            <option value="30">30 minutos</option>
+            <option value="60">1 hora</option>
+            <option value="0">Desativado</option>
+          </select>
+        </label>
+        <button type="button" class="btn ghost" id="settingsLockBtn">🔒 Bloquear agora</button>
       </div>
     </form>
   </dialog>
@@ -184,6 +278,10 @@
         <div class="lightbox-actions">
           <button class="btn ghost light" id="lightboxFavorite">♡ Favoritar</button>
           <button class="btn ghost light" id="lightboxEdit">✎ Editar</button>
+          <button class="btn ghost light" id="lightboxSlideshow">▶ Slideshow</button>
+          <button class="btn ghost light" id="lightboxInfo">ⓘ Info</button>
+          <button class="btn ghost light" id="lightboxMove">↪ Mover</button>
+          <button class="btn ghost light" id="lightboxShare">↗ Compartilhar</button>
           <button class="btn ghost light" id="lightboxDownload">↓ Baixar</button>
           <button class="btn danger light" id="lightboxDelete">Excluir</button>
         </div>
@@ -192,6 +290,61 @@
     <button class="lightbox-nav next" id="lightboxNext" aria-label="Próxima foto">›</button>
   </dialog>
 
+
+
+  <dialog id="albumCoverDialog" class="dialog wide album-cover-dialog">
+    <form method="dialog" class="dialog-card">
+      <button class="dialog-close" value="cancel" aria-label="Fechar">×</button>
+      <div class="dialog-head">
+        <div class="dialog-icon">▣</div>
+        <div>
+          <h2 id="albumCoverDialogTitle">Editar capa do álbum</h2>
+          <p>Escolha a foto da capa, ajuste o enquadramento e decida se a capa deve alternar automaticamente.</p>
+        </div>
+      </div>
+
+      <div class="album-cover-editor-layout">
+        <div class="album-cover-editor-preview">
+          <img id="albumCoverPreviewImage" alt="Prévia da capa" />
+          <div class="album-cover-editor-shade"></div>
+          <span>Prévia da capa</span>
+        </div>
+
+        <div class="album-cover-editor-controls">
+          <label class="range-control">
+            <span>Posição horizontal <output id="coverPositionXOut">50%</output></span>
+            <input id="coverPositionX" type="range" min="0" max="100" value="50" />
+          </label>
+          <label class="range-control">
+            <span>Posição vertical <output id="coverPositionYOut">50%</output></span>
+            <input id="coverPositionY" type="range" min="0" max="100" value="50" />
+          </label>
+          <label class="range-control">
+            <span>Zoom <output id="coverZoomOut">100%</output></span>
+            <input id="coverZoom" type="range" min="100" max="180" value="100" />
+          </label>
+          <label class="album-cover-toggle">
+            <input id="coverSlideshowToggle" type="checkbox" checked />
+            <span>
+              <strong>Capa com slideshow automático</strong>
+              <small>Alterna as fotos do álbum automaticamente.</small>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div class="album-cover-choice-head">
+        <strong>Escolher foto da capa</strong>
+        <span>Toque em qualquer foto do álbum.</span>
+      </div>
+      <div id="albumCoverChoices" class="album-cover-choices"></div>
+
+      <div class="dialog-actions">
+        <button class="btn ghost" value="cancel">Cancelar</button>
+        <button class="btn primary" type="button" id="saveAlbumCoverBtn">Salvar capa</button>
+      </div>
+    </form>
+  </dialog>
 
   <dialog id="editorDialog" class="dialog editor-dialog">
     <form method="dialog" class="dialog-card editor-card" id="editorForm">
@@ -215,6 +368,7 @@
             <button type="button" class="chip" id="rotateRightBtn">↷ Girar</button>
             <button type="button" class="chip" id="flipHBtn">↔ Espelhar</button>
             <button type="button" class="chip" id="flipVBtn">↕ Inverter</button>
+            <button type="button" class="chip" id="autoEnhanceBtn">✦ Auto melhorar</button>
             <button type="button" class="chip" id="resetEditBtn">↺ Restaurar ajustes</button>
           </div>
         </div>
@@ -264,6 +418,25 @@
           <label class="range-control">
             <span>Saturação <output id="saturationOut">100%</output></span>
             <input id="saturation" type="range" min="0" max="200" value="100" />
+          </label>
+          <label class="range-control">
+            <span>Redução de ruído <output id="noiseReductionOut">0%</output></span>
+            <input id="noiseReduction" type="range" min="0" max="100" value="0" />
+          </label>
+          <label class="range-control">
+            <span>Nitidez <output id="sharpnessOut">0%</output></span>
+            <input id="sharpness" type="range" min="0" max="100" value="0" />
+          </label>
+          <label class="range-control">
+            <span>Temperatura <output id="warmthOut">0</output></span>
+            <input id="warmth" type="range" min="-50" max="50" value="0" />
+          </label>
+          <label>
+            Qualidade de saída
+            <select id="upscaleMode">
+              <option value="1">Original 1×</option>
+              <option value="2">Upscale 2×</option>
+            </select>
           </label>
           <label class="range-control">
             <span>Preto e branco <output id="grayscaleOut">0%</output></span>
@@ -348,6 +521,7 @@
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
+  <script src="vault.js" defer></script>
   <script src="app.js" defer></script>
 </body>
 </html>

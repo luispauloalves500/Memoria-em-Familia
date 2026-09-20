@@ -1,11 +1,12 @@
 const DB_NAME = 'memorias-em-familia';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const PHOTO_STORE = 'photos';
 const ALBUM_STORE = 'albums';
 
-const BUNDLED_MANIFEST_URL = './assets/family-photos/manifest.json';
-const BUNDLED_IMPORT_KEY = 'memorias-bundled-family-photos-v1';
+const BUNDLED_MANIFEST_URL = './assets/vault/manifest.json';
+const BUNDLED_IMPORT_KEY = 'memorias-bundled-casamento-v3-secure';
 const assetBlobCache = new Map();
+const runtimeMediaUrls = new Map();
 
 const IMAGE_EXTENSIONS = new Set(['jpg','jpeg','jfif','png','webp','avif','gif','bmp','heic','heif']);
 const state = {
@@ -17,6 +18,10 @@ const state = {
   uploadFiles: [],
   lightboxIds: [],
   lightboxIndex: 0,
+  selectionMode: false,
+  selectedIds: new Set(),
+  galleryMode: localStorage.getItem('memorias-gallery-mode') || 'grid',
+  momentFilter: 'all',
 };
 
 const editorState = {
@@ -27,6 +32,21 @@ const editorState = {
   rotation: 0,
   flipX: false,
   flipY: false,
+};
+
+const galleryUiState = {
+  homeCarouselTimer: null,
+  albumCardTimer: null,
+  albumHeroTimer: null,
+  slideshowTimer: null,
+  slideshowPlaying: false,
+  homeCarouselIndex: 0,
+  albumHeroIndex: 0,
+};
+
+const coverEditorState = {
+  albumId: null,
+  selectedPhotoId: null,
 };
 
 const radioState = {
@@ -152,21 +172,58 @@ function displayBlob(photo) { return photo?.blob || null; }
 function thumbnailBlob(photo) { return photo?.thumbBlob || photo?.blob || null; }
 function photoSourceUrl(photo, thumbnail=false) {
   if (!photo) return '';
-  if (thumbnail && photo.thumbUrl) return photo.thumbUrl;
-  if (photo.assetUrl) return photo.assetUrl;
+  const runtimeKey = `${thumbnail ? 't' : 'o'}:${photo.id}`;
+  if (runtimeMediaUrls.has(runtimeKey)) return runtimeMediaUrls.get(runtimeKey);
   const blob = thumbnail ? thumbnailBlob(photo) : displayBlob(photo);
   return blob ? urlForBlob(blob) : '';
 }
-async function blobForPhoto(photo) {
-  const direct = displayBlob(photo);
-  if (direct) return direct;
-  if (!photo?.assetUrl) return null;
-  if (assetBlobCache.has(photo.assetUrl)) return assetBlobCache.get(photo.assetUrl);
-  const response = await fetch(photo.assetUrl);
-  if (!response.ok) throw new Error(`Não foi possível abrir a foto (${response.status}).`);
-  const blob = await response.blob();
-  assetBlobCache.set(photo.assetUrl, blob);
-  return blob;
+async function blobForPhoto(photo, thumbnail=false) {
+  if (!photo) return null;
+  if (window.MemVault?.isUnlocked()) {
+    const protectedBlob = await window.MemVault.getBlob(photo, thumbnail);
+    if (protectedBlob) return protectedBlob;
+  }
+  const direct = thumbnail ? thumbnailBlob(photo) : displayBlob(photo);
+  return direct || null;
+}
+
+async function ensurePhotoObjectUrl(photo, thumbnail=false) {
+  if (!photo) return '';
+  const runtimeKey = `${thumbnail ? 't' : 'o'}:${photo.id}`;
+  if (runtimeMediaUrls.has(runtimeKey)) return runtimeMediaUrls.get(runtimeKey);
+  const blob = await blobForPhoto(photo, thumbnail);
+  if (!blob) return '';
+  const url = urlForBlob(blob);
+  runtimeMediaUrls.set(runtimeKey, url);
+  return url;
+}
+
+async function hydratePhotoThumbnails() {
+  const photos = state.photos.filter(p => !p.previewUnsupported);
+  const queue = [...photos];
+  const workers = Array.from({length: Math.min(6, queue.length || 1)}, async () => {
+    while (queue.length) {
+      const photo = queue.shift();
+      try { await ensurePhotoObjectUrl(photo, true); } catch (err) { console.warn('Miniatura protegida indisponível', photo?.id, err); }
+    }
+  });
+  await Promise.all(workers);
+}
+
+async function migrateLegacyPlainPhotos() {
+  if (!window.MemVault?.isUnlocked()) return;
+  let changed = 0;
+  for (let i=0; i<state.photos.length; i++) {
+    const photo = state.photos[i];
+    if (photo.bundled || photo.encryptedBlob || !photo.blob) continue;
+    try {
+      const migrated = await window.MemVault.migratePlainPhoto(photo);
+      await idbPut(PHOTO_STORE, migrated);
+      state.photos[i] = migrated;
+      changed++;
+    } catch (err) { console.warn('Falha ao criptografar foto local antiga', photo?.id, err); }
+  }
+  if (changed) toast(`${changed} foto(s) local(is) foram protegidas com criptografia.`, 4200);
 }
 
 function photoVisual(photo, {thumbnail=true, alt=''}={}) {
@@ -182,16 +239,18 @@ function photoVisual(photo, {thumbnail=true, alt=''}={}) {
 
 function renderPhotoCard(photo) {
   const album = getAlbum(photo.albumId);
+  const selected = state.selectedIds.has(photo.id);
   return `
-    <article class="photo-card" data-photo-id="${photo.id}">
+    <article class="photo-card ${state.selectionMode ? 'selection-mode' : ''} ${selected ? 'selected' : ''}" data-photo-id="${photo.id}">
       ${photoVisual(photo, {thumbnail:true})}
       <div class="photo-overlay"></div>
       <div class="photo-badges">
         ${album ? `<span class="photo-badge">${escapeHtml(album.name)}</span>` : ''}
+        ${photo.moment ? `<span class="photo-badge moment">${escapeHtml(photo.moment)}</span>` : ''}
         ${photo.editedFrom ? `<span class="photo-badge edited">Editada</span>` : ''}
       </div>
-      <button class="favorite-btn ${photo.favorite ? 'on' : ''}" data-favorite-id="${photo.id}" aria-label="Favoritar">${photo.favorite ? '♥' : '♡'}</button>
-      <div class="photo-info"><strong>${escapeHtml(photo.name || 'Foto')}</strong><span>${formatDate(photo.createdAt)}</span></div>
+      ${state.selectionMode ? `<button class="photo-select-btn ${selected ? 'on' : ''}" data-select-photo="${photo.id}" aria-label="Selecionar foto">${selected ? '✓' : ''}</button>` : `<button class="favorite-btn ${photo.favorite ? 'on' : ''}" data-favorite-id="${photo.id}" aria-label="Favoritar">${photo.favorite ? '♥' : '♡'}</button>`}
+      <div class="photo-info"><strong>${escapeHtml(photo.name || 'Foto')}</strong><span>${photo.order ? `#${photo.order} · ` : ''}${formatDate(photo.createdAt)}</span></div>
     </article>`;
 }
 
@@ -205,7 +264,7 @@ function renderEmpty(title, text, actionLabel='Enviar fotos', action='upload') {
 }
 
 function renderHeroBanner(photos, favoritesCount=0) {
-  const picks = photos.slice(0, 5);
+  const picks = photos.slice(0, 6);
   const main = picks[0];
   const secondary = picks.slice(1, 5);
   const album = main ? getAlbum(main.albumId) : null;
@@ -222,30 +281,33 @@ function renderHeroBanner(photos, favoritesCount=0) {
   }
 
   const chips = [
-    `${photos.length} ${photos.length === 1 ? 'foto' : 'fotos'}`,
+    `${activePhotos().length} ${activePhotos().length === 1 ? 'foto' : 'fotos'}`,
     `${state.albums.length} ${state.albums.length === 1 ? 'álbum' : 'álbuns'}`,
     `${favoritesCount} ${favoritesCount === 1 ? 'favorita' : 'favoritas'}`,
   ];
 
   return `
-    <div class="hero-banner-card">
-      <article class="hero-banner-main" data-photo-id="${main.id}">
-        ${photoVisual(main, {thumbnail:false, alt: main.name || 'Foto em destaque'})}
+    <div class="hero-banner-card" data-home-carousel>
+      <article class="hero-banner-main" data-home-carousel-main data-photo-id="${main.id}">
+        <img class="home-carousel-image" src="${escapeHtml(photoSourceUrl(main,true))}" alt="${escapeHtml(main.name || 'Foto em destaque')}" />
         <div class="hero-banner-overlay"></div>
         <div class="hero-banner-content">
           <div class="hero-banner-pill">Destaque da galeria</div>
-          <strong>${escapeHtml(main.name || 'Foto em destaque')}</strong>
-          <span>${album ? escapeHtml(album.name) + ' · ' : ''}${formatDate(main.createdAt)}</span>
+          <strong data-home-carousel-title>${escapeHtml(main.name || 'Foto em destaque')}</strong>
+          <span data-home-carousel-meta>${album ? escapeHtml(album.name) + ' · ' : ''}${formatDate(main.createdAt)}</span>
           <div class="hero-banner-chipbar">
             ${chips.map(chip => `<span>${escapeHtml(chip)}</span>`).join('')}
           </div>
         </div>
+        <div class="hero-carousel-dots" aria-label="Navegação do banner">
+          ${picks.map((photo,i)=>`<button type="button" class="hero-carousel-dot ${i===0?'active':''}" data-home-slide="${i}" data-photo-id="${photo.id}" aria-label="Mostrar foto ${i+1}"></button>`).join('')}
+        </div>
       </article>
       <div class="hero-banner-thumbs">
-        ${secondary.map(photo => {
+        ${secondary.map((photo,i) => {
           const subAlbum = getAlbum(photo.albumId);
           return `
-            <article class="hero-thumb" data-photo-id="${photo.id}">
+            <article class="hero-thumb ${i===0?'active':''}" data-home-thumb-id="${photo.id}" data-photo-id="${photo.id}">
               ${photoVisual(photo, {thumbnail:true, alt: photo.name || 'Miniatura'})}
               <div class="hero-thumb-overlay"></div>
               <div class="hero-thumb-info">
@@ -281,7 +343,7 @@ function renderHome() {
           <span>◉ Upload rápido</span>
           <span>✎ Editor integrado</span>
           <span>♫ Rádio no site</span>
-          <span>☁ Estrutura pronta para nuvem</span>
+          <span>🔐 Cofre criptografado</span>
         </div>
       </div>
       ${renderHeroBanner(bannerPhotos, favorites)}
@@ -313,6 +375,26 @@ function albumVisualMeta(album, photos=[]) {
   return { icon: photos.length ? '◫' : '▣', accent:'default', label: photos.length ? 'Coleção de memórias' : 'Pronto para receber fotos' };
 }
 
+function orderedAlbumPhotos(album, photos) {
+  const list = [...photos];
+  const preferredId = album?.coverPhotoId;
+  if (preferredId) {
+    const idx = list.findIndex(p=>p.id===preferredId);
+    if (idx > 0) list.unshift(...list.splice(idx,1));
+  } else {
+    const fav = list.findIndex(p=>p.favorite);
+    if (fav > 0) list.unshift(...list.splice(fav,1));
+  }
+  return list;
+}
+
+function albumCoverImageStyle(album) {
+  const x = Number(album?.coverPositionX ?? 50);
+  const y = Number(album?.coverPositionY ?? 50);
+  const zoom = Math.max(100, Math.min(180, Number(album?.coverZoom ?? 100))) / 100;
+  return `--cover-x:${x}%;--cover-y:${y}%;--cover-zoom:${zoom};`;
+}
+
 function albumCoverMarkup(album, photos) {
   const meta = albumVisualMeta(album, photos);
   if (!photos.length) {
@@ -328,16 +410,18 @@ function albumCoverMarkup(album, photos) {
         </div>
       </div>`;
   }
-  const cover = photos.find(p=>p.favorite) || photos[0];
-  const thumbs = photos.filter(p => p.id !== cover.id).slice(0,3);
+  const ordered = orderedAlbumPhotos(album, photos);
+  const cover = ordered[0];
+  const thumbs = ordered.slice(1,4);
+  const slideshowOn = album.coverSlideshow !== false && photos.length > 1;
   return `
-    <div class="album-cover-photo-layout">
-      <div class="album-cover-main">
-        ${photoVisual(cover,{thumbnail:true,alt:cover.name || album.name || 'Capa do álbum'})}
+    <div class="album-cover-photo-layout" data-album-cover-layout="${album.id}">
+      <div class="album-cover-main" style="${albumCoverImageStyle(album)}">
+        <img class="album-cover-main-image" data-album-cover-image data-photo-id="${cover.id}" src="${escapeHtml(photoSourceUrl(cover,true))}" alt="${escapeHtml(cover.name || album.name || 'Capa do álbum')}" />
         <div class="album-cover-main-overlay"></div>
         <div class="album-cover-main-meta">
-          <span>${meta.label}</span>
-          <strong>${escapeHtml(cover.name || 'Foto em destaque')}</strong>
+          <span>${slideshowOn ? '▶ Capa dinâmica' : meta.label}</span>
+          <strong data-album-cover-title>${escapeHtml(cover.name || 'Foto em destaque')}</strong>
         </div>
       </div>
       <div class="album-cover-side ${thumbs.length ? '' : 'empty'}">
@@ -345,6 +429,7 @@ function albumCoverMarkup(album, photos) {
         ${thumbs.length < 3 ? `<div class="album-cover-thumb album-cover-thumb-fill ${meta.accent}"><span>${meta.icon}</span></div>`.repeat(3-thumbs.length) : ''}
       </div>
       <div class="album-cover-counter">${photos.length} ${photos.length === 1 ? 'foto' : 'fotos'}</div>
+      <button class="album-cover-edit-btn" type="button" data-edit-album-cover="${album.id}" aria-label="Editar capa do álbum">✎ Capa</button>
     </div>`;
 }
 
@@ -362,6 +447,43 @@ function renderAlbumCard(album) {
     </article>`;
 }
 
+function renderAlbumHero(album, photos) {
+  if (!album) return '';
+  const ordered = orderedAlbumPhotos(album, photos);
+  const cover = ordered[0];
+  const meta = albumVisualMeta(album, photos);
+  if (!cover) {
+    return `
+      <section class="album-hero album-hero-empty ${meta.accent}">
+        <div class="album-hero-copy">
+          <span class="album-hero-eyebrow">${meta.label}</span>
+          <h1>${escapeHtml(album.name)}</h1>
+          <p>${escapeHtml(album.description || 'Um espaço especial para guardar suas melhores lembranças.')}</p>
+          <div class="album-hero-actions">
+            <button class="btn primary" data-action="upload">↑ Adicionar fotos</button>
+            <button class="btn ghost" data-edit-album-cover="${album.id}">✎ Editar capa</button>
+          </div>
+        </div>
+      </section>`;
+  }
+  return `
+    <section class="album-hero" data-album-hero="${album.id}" style="${albumCoverImageStyle(album)}">
+      <img class="album-hero-image" data-album-hero-image src="${escapeHtml(photoSourceUrl(cover,true))}" alt="${escapeHtml(cover.name || album.name)}" />
+      <div class="album-hero-shade"></div>
+      <div class="album-hero-copy">
+        <span class="album-hero-eyebrow">${meta.label} · ${photos.length} ${photos.length===1?'foto':'fotos'}</span>
+        <h1>${escapeHtml(album.name)}</h1>
+        <p>${escapeHtml(album.description || 'Um espaço especial para guardar suas melhores lembranças.')}</p>
+        <div class="album-hero-actions">
+          <button class="btn light" data-start-album-slideshow="${album.id}">▶ Slideshow</button>
+          <button class="btn light" data-edit-album-cover="${album.id}">✎ Editar capa</button>
+          <button class="btn primary" data-action="upload">↑ Adicionar fotos</button>
+        </div>
+      </div>
+      <div class="album-hero-progress" aria-hidden="true"><span></span></div>
+    </section>`;
+}
+
 function renderAlbums() {
   root.innerHTML = `
     <div class="section-head" style="margin-top:0"><div><h2>Álbuns</h2><p>Momentos, viagens, pessoas e datas especiais.</p></div><button class="btn primary" data-action="album">+ Novo álbum</button></div>
@@ -369,22 +491,71 @@ function renderAlbums() {
   `;
 }
 
+const WEDDING_MOMENTS = ['Preparativos','Cerimônia','Noivos','Família','Convidados','Festa','Detalhes'];
+
+function timelineSorted(list) {
+  return [...list].sort((a,b) => {
+    const ao = Number(a.order || 0), bo = Number(b.order || 0);
+    if (ao && bo) return ao - bo;
+    return new Date(a.createdAt) - new Date(b.createdAt);
+  });
+}
+
+function renderTimeline(list) {
+  const ordered = timelineSorted(list);
+  return `<div class="timeline-list">${ordered.map((photo,index)=>`
+    <article class="timeline-item ${state.selectedIds.has(photo.id) ? 'selected' : ''}" data-photo-id="${photo.id}">
+      <div class="timeline-marker"><span>${state.selectionMode && state.selectedIds.has(photo.id) ? '✓' : (photo.order || index+1)}</span></div>
+      <div class="timeline-photo">${photoVisual(photo,{thumbnail:true})}</div>
+      <div class="timeline-copy">
+        <strong>${escapeHtml(photo.name || 'Foto')}</strong>
+        <span>${escapeHtml(photo.moment || getAlbum(photo.albumId)?.name || 'Memória')} · ${bytesLabel(photo.size)}</span>
+        <small>${photo.width && photo.height ? `${photo.width}×${photo.height} · ` : ''}${formatDate(photo.createdAt)}</small>
+      </div>
+    </article>`).join('')}</div>`;
+}
+
+function selectionToolbar() {
+  if (!state.selectionMode) return '';
+  return `<div class="selection-toolbar">
+    <strong>${state.selectedIds.size} selecionada(s)</strong>
+    <div>
+      <button class="btn ghost" data-bulk-action="favorite">♥ Favoritar</button>
+      <button class="btn ghost" data-bulk-action="move">↪ Mover</button>
+      <button class="btn danger" data-bulk-action="delete">Excluir</button>
+      <button class="btn ghost" data-bulk-action="cancel">Cancelar</button>
+    </div>
+  </div>`;
+}
+
 function renderPhotoView(title, subtitle, list, opts={}) {
-  const filtered = sorted(list.filter(photoMatches));
+  let filtered = sorted(list.filter(photoMatches));
+  const isWedding = opts.album?.name?.toLowerCase().includes('casamento');
+  if (isWedding && state.momentFilter !== 'all') filtered = filtered.filter(p => p.moment === state.momentFilter);
+  const albumHero = opts.album ? renderAlbumHero(opts.album, filtered) : '';
+  const viewMarkup = state.galleryMode === 'timeline' ? renderTimeline(filtered) : `<div class="photo-grid">${filtered.map(renderPhotoCard).join('')}</div>`;
   root.innerHTML = `
-    <div class="section-head" style="margin-top:0"><div><h2>${escapeHtml(title)}</h2><p>${escapeHtml(subtitle)}</p></div><button class="btn primary" data-action="upload">↑ Enviar fotos</button></div>
+    ${albumHero}
+    <div class="section-head ${opts.album ? 'album-section-head' : ''}" style="${opts.album ? '' : 'margin-top:0'}"><div><h2>${escapeHtml(title)}</h2><p>${escapeHtml(subtitle)}</p></div><div class="section-actions">${filtered.length ? `<button class="btn ghost" data-start-view-slideshow>▶ Slideshow</button>` : ''}${opts.album ? `<button class="btn ghost" data-manage-album="${opts.album.id}">⚙ Gerenciar</button>` : ''}<button class="btn primary" data-action="upload">↑ Enviar fotos</button></div></div>
+    ${selectionToolbar()}
     <div class="toolbar">
       <div class="filter-row">
         ${opts.backAlbum ? `<button class="chip" data-view-link="albums">← Álbuns</button>` : ''}
         <span class="chip active">${filtered.length} ${filtered.length===1?'foto':'fotos'}</span>
+        ${isWedding ? `<button class="chip ${state.momentFilter==='all'?'active':''}" data-moment-filter="all">Todos</button>${WEDDING_MOMENTS.map(m=>`<button class="chip ${state.momentFilter===m?'active':''}" data-moment-filter="${m}">${m}</button>`).join('')}` : ''}
       </div>
-      <select class="select" id="sortSelect">
-        <option value="newest" ${state.sort==='newest'?'selected':''}>Mais recentes</option>
-        <option value="oldest" ${state.sort==='oldest'?'selected':''}>Mais antigas</option>
-        <option value="name" ${state.sort==='name'?'selected':''}>Nome</option>
-      </select>
+      <div class="toolbar-actions">
+        <button class="chip ${state.galleryMode==='grid'?'active':''}" data-gallery-mode="grid">▦ Grade</button>
+        <button class="chip ${state.galleryMode==='timeline'?'active':''}" data-gallery-mode="timeline">↕ Timeline</button>
+        <button class="chip ${state.selectionMode?'active':''}" data-toggle-selection>${state.selectionMode?'✓ Selecionando':'☑ Selecionar'}</button>
+        <select class="select" id="sortSelect">
+          <option value="newest" ${state.sort==='newest'?'selected':''}>Mais recentes</option>
+          <option value="oldest" ${state.sort==='oldest'?'selected':''}>Mais antigas</option>
+          <option value="name" ${state.sort==='name'?'selected':''}>Nome</option>
+        </select>
+      </div>
     </div>
-    ${filtered.length ? `<div class="photo-grid">${filtered.map(renderPhotoCard).join('')}</div>` : renderEmpty('Nada por aqui', state.search ? 'Nenhuma foto corresponde à sua busca.' : 'Adicione fotos para preencher esta coleção.')}
+    ${filtered.length ? viewMarkup : renderEmpty('Nada por aqui', state.search ? 'Nenhuma foto corresponde à sua busca.' : 'Adicione fotos para preencher esta coleção.')}
   `;
 }
 
@@ -401,22 +572,115 @@ function renderTrash() {
   `;
 }
 
+function clearDynamicUiTimers() {
+  for (const key of ['homeCarouselTimer','albumCardTimer','albumHeroTimer']) {
+    clearInterval(galleryUiState[key]);
+    galleryUiState[key] = null;
+  }
+}
+
 function renderCurrent() {
+  clearDynamicUiTimers();
   $$('.nav-item[data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === state.view || (state.view.startsWith('album:') && b.dataset.view === 'albums')));
-  if (state.view === 'home') return renderHome();
-  if (state.view === 'albums') return renderAlbums();
-  if (state.view === 'favorites') return renderPhotoView('Favoritos', 'As fotos que você marcou para encontrar mais rápido.', activePhotos().filter(p=>p.favorite));
-  if (state.view === 'trash') return renderTrash();
-  if (state.view.startsWith('album:')) {
+  if (state.view === 'home') renderHome();
+  else if (state.view === 'albums') renderAlbums();
+  else if (state.view === 'favorites') renderPhotoView('Favoritos', 'As fotos que você marcou para encontrar mais rápido.', activePhotos().filter(p=>p.favorite));
+  else if (state.view === 'trash') renderTrash();
+  else if (state.view.startsWith('album:')) {
     const albumId = state.view.split(':')[1];
     const album = getAlbum(albumId);
-    return renderPhotoView(album?.name || 'Álbum', album?.description || 'Fotos deste álbum.', albumPhotoList(albumId), { backAlbum:true });
-  }
-  renderPhotoView('Todas as fotos', 'Sua coleção completa de memórias.', activePhotos());
+    renderPhotoView(album?.name || 'Álbum', album?.description || 'Fotos deste álbum.', albumPhotoList(albumId), { backAlbum:true, album });
+  } else renderPhotoView('Todas as fotos', 'Sua coleção completa de memórias.', activePhotos());
+  requestAnimationFrame(startDynamicUi);
+}
+
+function setHomeCarouselSlide(index) {
+  const holder = $('[data-home-carousel]');
+  if (!holder) return;
+  const photos = sorted(activePhotos().filter(photoMatches)).slice(0,6);
+  if (!photos.length) return;
+  galleryUiState.homeCarouselIndex = (index + photos.length) % photos.length;
+  const photo = photos[galleryUiState.homeCarouselIndex];
+  const main = holder.querySelector('[data-home-carousel-main]');
+  const img = holder.querySelector('.home-carousel-image');
+  const title = holder.querySelector('[data-home-carousel-title]');
+  const meta = holder.querySelector('[data-home-carousel-meta]');
+  const album = getAlbum(photo.albumId);
+  if (!main || !img) return;
+  main.classList.add('is-changing');
+  setTimeout(() => {
+    img.src = photoSourceUrl(photo,true);
+    img.alt = photo.name || 'Foto em destaque';
+    main.dataset.photoId = photo.id;
+    title.textContent = photo.name || 'Foto em destaque';
+    meta.textContent = `${album?.name ? album.name + ' · ' : ''}${formatDate(photo.createdAt)}`;
+    holder.querySelectorAll('.hero-carousel-dot').forEach((dot,i)=>dot.classList.toggle('active', i===galleryUiState.homeCarouselIndex));
+    holder.querySelectorAll('[data-home-thumb-id]').forEach(thumb=>thumb.classList.toggle('active', thumb.dataset.homeThumbId===photo.id));
+    requestAnimationFrame(()=>main.classList.remove('is-changing'));
+  }, 180);
+}
+
+function startHomeCarousel() {
+  if (!$('[data-home-carousel]')) return;
+  clearInterval(galleryUiState.homeCarouselTimer);
+  galleryUiState.homeCarouselTimer = setInterval(()=>setHomeCarouselSlide(galleryUiState.homeCarouselIndex+1), 5200);
+}
+
+function startAlbumCardSlideshows() {
+  const cards = $$('[data-album-cover-layout]');
+  if (!cards.length) return;
+  const indices = new Map();
+  galleryUiState.albumCardTimer = setInterval(()=>{
+    cards.forEach(layout=>{
+      const album = getAlbum(layout.dataset.albumCoverLayout);
+      if (!album || album.coverSlideshow === false) return;
+      const photos = orderedAlbumPhotos(album, albumPhotoList(album.id));
+      if (photos.length < 2) return;
+      const img = layout.querySelector('[data-album-cover-image]');
+      const title = layout.querySelector('[data-album-cover-title]');
+      if (!img) return;
+      const current = (indices.get(album.id) || 0) + 1;
+      const idx = current % photos.length;
+      indices.set(album.id, idx);
+      const photo = photos[idx];
+      img.classList.add('is-changing');
+      setTimeout(()=>{
+        img.src = photoSourceUrl(photo,true);
+        img.dataset.photoId = photo.id;
+        if (title) title.textContent = photo.name || 'Foto';
+        requestAnimationFrame(()=>img.classList.remove('is-changing'));
+      }, 160);
+    });
+  }, 4300);
+}
+
+function startAlbumHeroCarousel() {
+  const hero = $('[data-album-hero]');
+  if (!hero) return;
+  const album = getAlbum(hero.dataset.albumHero);
+  const photos = album ? orderedAlbumPhotos(album, albumPhotoList(album.id)) : [];
+  if (!album || photos.length < 2 || album.coverSlideshow === false) return;
+  galleryUiState.albumHeroIndex = 0;
+  galleryUiState.albumHeroTimer = setInterval(()=>{
+    galleryUiState.albumHeroIndex = (galleryUiState.albumHeroIndex + 1) % Math.min(photos.length, 12);
+    const photo = photos[galleryUiState.albumHeroIndex];
+    const img = hero.querySelector('[data-album-hero-image]');
+    if (!img) return;
+    hero.classList.add('is-changing');
+    setTimeout(()=>{
+      img.src = photoSourceUrl(photo,true);
+      setTimeout(()=>hero.classList.remove('is-changing'),80);
+    },220);
+  }, 5600);
+}
+
+function startDynamicUi() {
+  startHomeCarousel();
+  startAlbumCardSlideshows();
+  startAlbumHeroCarousel();
 }
 
 async function importBundledFamilyPhotos() {
-  if (localStorage.getItem(BUNDLED_IMPORT_KEY) === 'done') return false;
   try {
     const response = await fetch(BUNDLED_MANIFEST_URL, { cache:'no-cache' });
     if (!response.ok) throw new Error(`Manifesto indisponível (${response.status})`);
@@ -424,43 +688,102 @@ async function importBundledFamilyPhotos() {
     const albumInfo = manifest?.album;
     const photos = Array.isArray(manifest?.photos) ? manifest.photos : [];
     if (!albumInfo?.id || !photos.length) return false;
+    const importedVersion = localStorage.getItem(BUNDLED_IMPORT_KEY);
+    const hasCurrentEncryptedRefs = state.photos.some(p => p.bundled && p.encryptedAsset && p.bundleVersion === manifest.version);
+    if (importedVersion === manifest.version && hasCurrentEncryptedRefs) return false;
 
     let album = state.albums.find(a => a.id === albumInfo.id);
     if (!album) {
       album = {
         id: albumInfo.id,
-        name: albumInfo.name || 'Fotos da Família',
-        description: albumInfo.description || 'Fotos incluídas no acervo do site',
+        name: albumInfo.name || 'Casamento',
+        description: albumInfo.description || 'Memórias e momentos especiais do casamento',
         createdAt: new Date().toISOString(),
       };
-      await idbPut(ALBUM_STORE, album);
       state.albums.push(album);
+    } else {
+      // Mantém capa/zoom/slideshow já configurados e atualiza somente a identidade do álbum.
+      album = {
+        ...album,
+        name: albumInfo.name || 'Casamento',
+        description: albumInfo.description || 'Memórias e momentos especiais do casamento',
+        updatedAt: new Date().toISOString(),
+      };
+      const albumIndex = state.albums.findIndex(a => a.id === album.id);
+      if (albumIndex >= 0) state.albums[albumIndex] = album;
     }
+    await idbPut(ALBUM_STORE, album);
 
-    const existing = new Set(state.photos.map(p => p.id));
+    const byId = new Map(state.photos.map(p => [p.id, p]));
     const baseTime = Date.now();
     let added = 0;
+    let migrated = 0;
+
     for (let i=0; i<photos.length; i++) {
       const item = photos[i];
-      if (!item?.id || existing.has(item.id)) continue;
+      if (!item?.id) continue;
+      const existing = byId.get(item.id);
+
+      if (existing) {
+        const updated = {
+          ...existing,
+          filename: item.filename || existing.filename,
+          originalFilename: item.originalFilename || existing.originalFilename || existing.filename,
+          type: 'image/webp',
+          size: Number(item.size) || existing.size || 0,
+          width: Number(item.width) || existing.width || null,
+          height: Number(item.height) || existing.height || null,
+          assetUrl: item.path,
+          thumbAssetUrl: item.thumb || item.path,
+          encryptedAsset: true,
+          iv: item.iv,
+          thumbIv: item.thumbIv,
+          aad: item.aad,
+          thumbAad: item.thumbAad,
+          previewUnsupported: false,
+          albumId: album.id,
+          tags: [...new Set([...(existing.tags || []).filter(t => !/^lote-/i.test(t)), 'casamento', 'família'])],
+          bundled: true,
+          bundleVersion: manifest.version || '2.0.0-secure',
+          sourceLot: null,
+          event: 'Casamento',
+          order: Number(item.order) || existing.order || null,
+          updatedAt: new Date().toISOString(),
+        };
+        await idbPut(PHOTO_STORE, updated);
+        const idx = state.photos.findIndex(p => p.id === updated.id);
+        if (idx >= 0) state.photos[idx] = updated;
+        byId.set(updated.id, updated);
+        migrated++;
+        continue;
+      }
+
       const createdAt = new Date(baseTime - (photos.length - i) * 1000).toISOString();
       const photo = {
         id: item.id,
-        name: item.name || item.filename || 'Foto',
+        name: item.name || item.originalFilename || item.filename || 'Foto do casamento',
         filename: item.filename || `${item.id}.webp`,
+        originalFilename: item.originalFilename || null,
         type: 'image/webp',
         size: Number(item.size) || 0,
         width: Number(item.width) || null,
         height: Number(item.height) || null,
         assetUrl: item.path,
-        thumbUrl: item.thumb || item.path,
+        thumbAssetUrl: item.thumb || item.path,
+        encryptedAsset: true,
+        iv: item.iv,
+        thumbIv: item.thumbIv,
+        aad: item.aad,
+        thumbAad: item.thumbAad,
         previewUnsupported: false,
         albumId: album.id,
-        tags: ['família', item.sourceLot || 'acervo'].filter(Boolean),
+        tags: ['casamento', 'família'],
         favorite: false,
         bundled: true,
-        bundleVersion: manifest.version || '1',
-        sourceLot: item.sourceLot || null,
+        bundleVersion: manifest.version || '2.0.0-secure',
+        sourceLot: null,
+        event: 'Casamento',
+        order: Number(item.order) || i + 1,
         createdAt,
         importedAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -468,14 +791,15 @@ async function importBundledFamilyPhotos() {
       };
       await idbPut(PHOTO_STORE, photo);
       state.photos.push(photo);
-      existing.add(photo.id);
+      byId.set(photo.id, photo);
       added++;
     }
-    localStorage.setItem(BUNDLED_IMPORT_KEY, 'done');
-    if (added) toast(`${added} fotos da família adicionadas ao acervo.`, 4200);
-    return added > 0;
+
+    localStorage.setItem(BUNDLED_IMPORT_KEY, manifest.version || '2.0.0-secure');
+    if (added || migrated) toast(`${photos.length} fotos organizadas no álbum Casamento.`, 4200);
+    return added > 0 || migrated > 0;
   } catch (err) {
-    console.warn('Não foi possível carregar as fotos incluídas no projeto.', err);
+    console.warn('Não foi possível carregar as fotos do casamento incluídas no projeto.', err);
     return false;
   }
 }
@@ -483,21 +807,20 @@ async function importBundledFamilyPhotos() {
 async function loadState() {
   state.photos = await idbAll(PHOTO_STORE);
   state.albums = await idbAll(ALBUM_STORE);
+
+  // Atualiza/inclui o álbum Casamento com referências criptografadas antes de renderizar.
+  await importBundledFamilyPhotos();
+  await migrateLegacyPlainPhotos();
+
   if (!state.albums.length) {
-    const starters = [
-      { id:uid('alb'), name:'Família', description:'Momentos especiais juntos', createdAt:new Date().toISOString() },
-      { id:uid('alb'), name:'Viagens', description:'Lugares e histórias para lembrar', createdAt:new Date().toISOString() },
-    ];
-    for (const a of starters) await idbPut(ALBUM_STORE, a);
-    state.albums = starters;
+    const starter = { id:uid('alb'), name:'Meu álbum', description:'Suas memórias especiais', createdAt:new Date().toISOString() };
+    await idbPut(ALBUM_STORE, starter);
+    state.albums = [starter];
   }
+
+  await hydratePhotoThumbnails();
   refreshAlbumSelect();
   renderCurrent();
-  const imported = await importBundledFamilyPhotos();
-  if (imported) {
-    refreshAlbumSelect();
-    renderCurrent();
-  }
 }
 
 function refreshAlbumSelect() {
@@ -514,6 +837,10 @@ function openUploadDialog() {
   $('#uploadProgress').hidden = true;
   $('#confirmUploadBtn').disabled = false;
   refreshAlbumSelect();
+  if (state.view.startsWith('album:')) {
+    const currentAlbumId = state.view.split(':')[1];
+    if ($('#uploadAlbum').querySelector(`option[value="${CSS.escape(currentAlbumId)}"]`)) $('#uploadAlbum').value = currentAlbumId;
+  }
   renderUploadPreview();
   $('#uploadDialog').showModal();
 }
@@ -628,14 +955,23 @@ async function saveUploads() {
       catch (_) { previewUnsupported = true; unsupported++; }
 
       const now = new Date().toISOString();
+      const id = uid('photo');
+      const encryptedOriginal = await window.MemVault.encryptBlob(file, id, 'original');
+      const encryptedThumb = thumbBlob ? await window.MemVault.encryptBlob(thumbBlob, id, 'thumb') : null;
       const photo = {
-        id: uid('photo'),
+        id,
         name: file.name.replace(/\.[^.]+$/, '') || 'Foto',
         filename: file.name || `foto-${Date.now()}.jpg`,
         type: mimeFromFile(file),
         size: file.size,
-        blob: file,
-        thumbBlob,
+        encryptedBlob: encryptedOriginal.blob,
+        localIv: encryptedOriginal.iv,
+        localAad: encryptedOriginal.aad,
+        thumbEncryptedBlob: encryptedThumb?.blob || null,
+        thumbType: thumbBlob?.type || null,
+        thumbLocalIv: encryptedThumb?.iv || null,
+        thumbLocalAad: encryptedThumb?.aad || null,
+        encryptedLocal: true,
         previewUnsupported,
         albumId,
         tags,
@@ -647,6 +983,7 @@ async function saveUploads() {
       };
       await idbPut(PHOTO_STORE, photo);
       state.photos.push(photo);
+      if (thumbBlob) runtimeMediaUrls.set(`t:${photo.id}`, urlForBlob(thumbBlob));
       saved++;
       setUploadProgress(i+1, files.length, `Salvando ${file.name}`);
     }
@@ -679,6 +1016,156 @@ async function createAlbum() {
   renderCurrent();
   toast('Álbum criado.');
   return true;
+}
+
+
+let pendingMoveIds = [];
+let infoPhotoId = null;
+
+function openAlbumManager(albumId) {
+  const album = getAlbum(albumId);
+  if (!album) return;
+  $('#albumManageId').value = album.id;
+  $('#albumManageName').value = album.name || '';
+  $('#albumManageDescription').value = album.description || '';
+  const protectedAlbum = album.id === 'album_fotos_familia';
+  $('#deleteAlbumBtn').disabled = protectedAlbum;
+  $('#deleteAlbumBtn').title = protectedAlbum ? 'O álbum Casamento faz parte do acervo protegido.' : 'Excluir álbum';
+  $('#albumManageDialog').showModal();
+}
+
+async function saveAlbumManage() {
+  const album = getAlbum($('#albumManageId').value);
+  if (!album) return;
+  const name = $('#albumManageName').value.trim();
+  if (!name) { toast('Digite um nome para o álbum.'); return; }
+  album.name = name;
+  album.description = $('#albumManageDescription').value.trim();
+  album.updatedAt = new Date().toISOString();
+  await idbPut(ALBUM_STORE, album);
+  $('#albumManageDialog').close();
+  refreshAlbumSelect();
+  renderCurrent();
+  toast('Álbum atualizado.');
+}
+
+async function deleteManagedAlbum() {
+  const album = getAlbum($('#albumManageId').value);
+  if (!album || album.id === 'album_fotos_familia') return;
+  const photos = state.photos.filter(p=>p.albumId===album.id);
+  if (!confirm(`Excluir o álbum “${album.name}”? ${photos.length ? 'As fotos serão mantidas em “Sem álbum”.' : ''}`)) return;
+  for (const photo of photos) {
+    photo.albumId = null;
+    photo.updatedAt = new Date().toISOString();
+    await idbPut(PHOTO_STORE, photo);
+  }
+  await idbDelete(ALBUM_STORE, album.id);
+  state.albums = state.albums.filter(a=>a.id!==album.id);
+  $('#albumManageDialog').close();
+  state.view = 'albums';
+  refreshAlbumSelect();
+  renderCurrent();
+  toast('Álbum excluído; as fotos foram preservadas.');
+}
+
+function openMovePhotos(ids) {
+  pendingMoveIds = [...new Set((ids || []).filter(Boolean))];
+  if (!pendingMoveIds.length) return;
+  $('#movePhotosCount').textContent = `${pendingMoveIds.length} ${pendingMoveIds.length===1?'foto será movida':'fotos serão movidas'}.`;
+  $('#moveAlbumSelect').innerHTML = `<option value="">Sem álbum</option>` + state.albums.map(a=>`<option value="${a.id}">${escapeHtml(a.name)}</option>`).join('');
+  $('#movePhotosDialog').showModal();
+}
+
+async function confirmMovePhotos() {
+  const albumId = $('#moveAlbumSelect').value || null;
+  for (const id of pendingMoveIds) {
+    const photo = state.photos.find(p=>p.id===id);
+    if (!photo) continue;
+    photo.albumId = albumId;
+    photo.updatedAt = new Date().toISOString();
+    await idbPut(PHOTO_STORE, photo);
+  }
+  $('#movePhotosDialog').close();
+  pendingMoveIds = [];
+  state.selectedIds.clear();
+  state.selectionMode = false;
+  renderCurrent();
+  toast('Fotos movidas.');
+}
+
+function openPhotoInfo(photo) {
+  if (!photo) return;
+  infoPhotoId = photo.id;
+  const album = getAlbum(photo.albumId);
+  $('#photoInfoBody').innerHTML = `
+    <div><span>Nome</span><strong>${escapeHtml(photo.name || 'Foto')}</strong></div>
+    <div><span>Arquivo</span><strong>${escapeHtml(photo.filename || '-')}</strong></div>
+    <div><span>Álbum</span><strong>${escapeHtml(album?.name || 'Sem álbum')}</strong></div>
+    <div><span>Resolução</span><strong>${photo.width && photo.height ? `${photo.width} × ${photo.height}` : 'Não informada'}</strong></div>
+    <div><span>Tamanho</span><strong>${bytesLabel(photo.size)}</strong></div>
+    <div><span>Formato</span><strong>${escapeHtml(photo.type || 'imagem')}</strong></div>
+    <div><span>Data</span><strong>${formatDate(photo.createdAt)}</strong></div>
+    <div><span>Proteção</span><strong>${photo.bundled || photo.encryptedLocal ? 'Criptografada' : 'Local'}</strong></div>`;
+  $('#photoMomentSelect').value = photo.moment || '';
+  $('#photoInfoDialog').showModal();
+}
+
+async function savePhotoMoment() {
+  const photo = state.photos.find(p=>p.id===infoPhotoId);
+  if (!photo) return;
+  photo.moment = $('#photoMomentSelect').value || null;
+  photo.updatedAt = new Date().toISOString();
+  await idbPut(PHOTO_STORE, photo);
+  $('#photoInfoDialog').close();
+  renderCurrent();
+  if ($('#lightbox').open) updateLightbox();
+  toast('Categoria da foto atualizada.');
+}
+
+async function sharePhoto(photo) {
+  if (!photo) return;
+  try {
+    const blob = await blobForPhoto(photo, false);
+    if (!blob) throw new Error('Foto indisponível');
+    const file = new File([blob], photo.filename || 'foto.jpg', {type: photo.type || blob.type || 'image/jpeg'});
+    if (navigator.canShare?.({files:[file]}) && navigator.share) {
+      await navigator.share({title: photo.name || 'Memória', text:'Uma lembrança do nosso álbum.', files:[file]});
+    } else {
+      toast('Compartilhamento de arquivos não é suportado neste navegador. Use “Baixar”.', 4200);
+    }
+  } catch (err) {
+    if (err?.name !== 'AbortError') { console.error(err); toast('Não foi possível compartilhar esta foto.', 3600); }
+  }
+}
+
+function togglePhotoSelection(id) {
+  if (state.selectedIds.has(id)) state.selectedIds.delete(id); else state.selectedIds.add(id);
+  renderCurrent();
+}
+
+async function handleBulkAction(action) {
+  const ids = [...state.selectedIds];
+  if (action === 'cancel') {
+    state.selectedIds.clear(); state.selectionMode = false; renderCurrent(); return;
+  }
+  if (!ids.length) { toast('Selecione pelo menos uma foto.'); return; }
+  if (action === 'move') { openMovePhotos(ids); return; }
+  if (action === 'favorite') {
+    for (const id of ids) {
+      const photo = state.photos.find(p=>p.id===id); if (!photo) continue;
+      photo.favorite = true; photo.updatedAt = new Date().toISOString(); await idbPut(PHOTO_STORE, photo);
+    }
+    toast(`${ids.length} foto(s) adicionada(s) aos favoritos.`);
+  }
+  if (action === 'delete') {
+    if (!confirm(`Mover ${ids.length} foto(s) para a lixeira?`)) return;
+    for (const id of ids) {
+      const photo = state.photos.find(p=>p.id===id); if (!photo) continue;
+      photo.deletedAt = new Date().toISOString(); await idbPut(PHOTO_STORE, photo);
+    }
+    toast(`${ids.length} foto(s) movida(s) para a lixeira.`);
+  }
+  state.selectedIds.clear(); state.selectionMode = false; renderCurrent();
 }
 
 async function toggleFavorite(id) {
@@ -714,6 +1201,118 @@ async function permanentDelete(id) {
   toast('Foto apagada definitivamente.');
 }
 
+function openAlbumCoverEditor(albumId) {
+  const album = getAlbum(albumId);
+  const photos = albumPhotoList(albumId);
+  if (!album) return;
+  if (!photos.length) { toast('Adicione pelo menos uma foto ao álbum antes de escolher a capa.'); return; }
+  coverEditorState.albumId = albumId;
+  const ordered = orderedAlbumPhotos(album, photos);
+  coverEditorState.selectedPhotoId = album.coverPhotoId && photos.some(p=>p.id===album.coverPhotoId) ? album.coverPhotoId : ordered[0].id;
+  $('#coverPositionX').value = Number(album.coverPositionX ?? 50);
+  $('#coverPositionY').value = Number(album.coverPositionY ?? 50);
+  $('#coverZoom').value = Number(album.coverZoom ?? 100);
+  $('#coverSlideshowToggle').checked = album.coverSlideshow !== false;
+  renderAlbumCoverEditor();
+  $('#albumCoverDialog').showModal();
+}
+
+function renderAlbumCoverEditor() {
+  const album = getAlbum(coverEditorState.albumId);
+  if (!album) return;
+  const photos = albumPhotoList(album.id);
+  const selected = photos.find(p=>p.id===coverEditorState.selectedPhotoId) || photos[0];
+  $('#albumCoverDialogTitle').textContent = `Capa de ${album.name}`;
+  const preview = $('#albumCoverPreviewImage');
+  preview.src = photoSourceUrl(selected,true);
+  preview.alt = selected.name || 'Prévia da capa';
+  updateAlbumCoverPreviewStyle();
+  $('#albumCoverChoices').innerHTML = photos.map(photo=>`
+    <button type="button" class="album-cover-choice ${photo.id===selected.id?'active':''}" data-cover-choice="${photo.id}" title="${escapeHtml(photo.name || 'Foto')}">
+      ${photoVisual(photo,{thumbnail:true,alt:photo.name || 'Foto'})}
+      <span>${photo.id===selected.id?'✓':''}</span>
+    </button>`).join('');
+}
+
+function updateAlbumCoverPreviewStyle() {
+  const img = $('#albumCoverPreviewImage');
+  if (!img) return;
+  const x = Number($('#coverPositionX').value);
+  const y = Number($('#coverPositionY').value);
+  const zoom = Number($('#coverZoom').value) / 100;
+  img.style.objectPosition = `${x}% ${y}%`;
+  img.style.transform = `scale(${zoom})`;
+  $('#coverPositionXOut').textContent = `${x}%`;
+  $('#coverPositionYOut').textContent = `${y}%`;
+  $('#coverZoomOut').textContent = `${Math.round(zoom*100)}%`;
+}
+
+async function saveAlbumCoverSettings() {
+  const album = getAlbum(coverEditorState.albumId);
+  if (!album) return;
+  album.coverPhotoId = coverEditorState.selectedPhotoId;
+  album.coverPositionX = Number($('#coverPositionX').value);
+  album.coverPositionY = Number($('#coverPositionY').value);
+  album.coverZoom = Number($('#coverZoom').value);
+  album.coverSlideshow = $('#coverSlideshowToggle').checked;
+  album.updatedAt = new Date().toISOString();
+  await idbPut(ALBUM_STORE, album);
+  $('#albumCoverDialog').close();
+  renderCurrent();
+  toast('Capa do álbum atualizada.');
+}
+
+function setSlideshowPlaying(playing) {
+  galleryUiState.slideshowPlaying = playing;
+  clearInterval(galleryUiState.slideshowTimer);
+  galleryUiState.slideshowTimer = null;
+  const btn = $('#lightboxSlideshow');
+  if (btn) btn.textContent = playing ? 'Ⅱ Pausar slideshow' : '▶ Slideshow';
+  const lightbox = $('#lightbox');
+  lightbox?.classList.toggle('slideshow-active', playing);
+  lightbox?.classList.toggle('effect-kenburns', (localStorage.getItem('memorias-slideshow-effect') || 'kenburns') === 'kenburns');
+  if (playing) {
+    const interval = Number(localStorage.getItem('memorias-slideshow-speed') || 4200);
+    lightbox?.style.setProperty('--slideshow-duration', `${Math.max(2200, interval - 250)}ms`);
+    galleryUiState.slideshowTimer = setInterval(()=>transitionLightbox(1), Math.max(2500, interval));
+  }
+}
+
+function transitionLightbox(delta=1) {
+  const img = $('#lightboxImage');
+  if (!img) return;
+  img.classList.add('slideshow-changing');
+  setTimeout(()=>{
+    moveLightbox(delta);
+    if (galleryUiState.slideshowPlaying) {
+      img.style.animation = 'none';
+      void img.offsetWidth;
+      img.style.animation = '';
+    }
+    requestAnimationFrame(()=>setTimeout(()=>img.classList.remove('slideshow-changing'),40));
+  },220);
+}
+
+function startViewSlideshow(photoId=null) {
+  const list = visiblePhotosForLightbox();
+  if (!list.length) return;
+  state.lightboxIds = list.map(p=>p.id);
+  state.lightboxIndex = photoId ? Math.max(0,state.lightboxIds.indexOf(photoId)) : 0;
+  updateLightbox();
+  if (!$('#lightbox').open) $('#lightbox').showModal();
+  setSlideshowPlaying(true);
+}
+
+function startAlbumSlideshow(albumId) {
+  const photos = sorted(albumPhotoList(albumId).filter(photoMatches));
+  if (!photos.length) return;
+  state.lightboxIds = photos.map(p=>p.id);
+  state.lightboxIndex = 0;
+  updateLightbox();
+  if (!$('#lightbox').open) $('#lightbox').showModal();
+  setSlideshowPlaying(true);
+}
+
 function visiblePhotosForLightbox() {
   if (state.view === 'favorites') return sorted(activePhotos().filter(p=>p.favorite).filter(photoMatches));
   if (state.view.startsWith('album:')) return sorted(albumPhotoList(state.view.split(':')[1]).filter(photoMatches));
@@ -730,8 +1329,9 @@ function openLightbox(id) {
 
 function currentLightboxPhoto() { return state.photos.find(p=>p.id===state.lightboxIds[state.lightboxIndex]); }
 
-function updateLightbox() {
+async function updateLightbox() {
   const photo = currentLightboxPhoto(); if(!photo) return;
+  const token = photo.id;
   const album = getAlbum(photo.albumId);
   const img = $('#lightboxImage');
   if (photo.previewUnsupported) {
@@ -740,11 +1340,17 @@ function updateLightbox() {
     img.style.display = 'none';
   } else {
     img.style.display = '';
-    img.src = photoSourceUrl(photo, false);
     img.alt = photo.name || 'Foto';
+    const thumb = photoSourceUrl(photo, true);
+    if (thumb) img.src = thumb;
+    try {
+      const full = await ensurePhotoObjectUrl(photo, false);
+      if (full && currentLightboxPhoto()?.id === token) img.src = full;
+    } catch (err) { console.warn('Falha ao abrir original protegido', err); }
   }
   $('#lightboxTitle').textContent = photo.name || 'Foto';
-  $('#lightboxMeta').textContent = `${album?.name || 'Sem álbum'} · ${formatDate(photo.createdAt)} · ${bytesLabel(photo.size)}${photo.editedFrom ? ' · versão editada' : ''}`;
+  const resolution = photo.width && photo.height ? ` · ${photo.width}×${photo.height}` : '';
+  $('#lightboxMeta').textContent = `${album?.name || 'Sem álbum'} · ${formatDate(photo.createdAt)} · ${bytesLabel(photo.size)}${resolution}${photo.editedFrom ? ' · versão editada' : ''}`;
   $('#lightboxFavorite').textContent = photo.favorite ? '♥ Favorita' : '♡ Favoritar';
   $('#lightboxEdit').disabled = !!photo.previewUnsupported;
   $('#lightboxEdit').title = photo.previewUnsupported ? 'Este formato não pode ser editado neste navegador.' : 'Editar foto';
@@ -756,32 +1362,123 @@ function moveLightbox(delta) {
   updateLightbox();
 }
 
-function downloadPhoto(photo) {
+async function downloadPhoto(photo) {
   if (!photo) return;
-  const href = photo.assetUrl || (displayBlob(photo) ? urlForBlob(displayBlob(photo)) : '');
-  if (!href) return;
-  const a = document.createElement('a');
-  a.href = href;
-  a.download = photo.filename || `${photo.name || 'foto'}.jpg`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+  try {
+    const blob = await blobForPhoto(photo, false);
+    if (!blob) throw new Error('Arquivo não encontrado');
+    const href = urlForBlob(blob);
+    const a = document.createElement('a');
+    a.href = href;
+    a.download = photo.filename || `${photo.name || 'foto'}.jpg`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } catch (err) {
+    console.error(err);
+    toast('Não foi possível baixar esta foto protegida.', 3600);
+  }
 }
 
-function exportBackup() {
-  const data = {
-    version:2,
-    exportedAt:new Date().toISOString(),
-    albums:state.albums,
-    photos:state.photos.map(({blob, thumbBlob, ...meta})=>meta),
-    note:'Este backup contém metadados. As imagens continuam no armazenamento local do navegador.'
-  };
-  const blob = new Blob([JSON.stringify(data,null,2)], {type:'application/json'});
-  const a=document.createElement('a');
-  a.href=urlForBlob(blob);
-  a.download=`memorias-backup-${new Date().toISOString().slice(0,10)}.json`;
-  a.click();
-  toast('Backup de metadados exportado.');
+async function blobToBase64(blob) {
+  if (!blob) return null;
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = '';
+  const step = 0x8000;
+  for (let i=0; i<bytes.length; i+=step) binary += String.fromCharCode(...bytes.subarray(i, i+step));
+  return btoa(binary);
+}
+
+function base64ToBlob(value) {
+  if (!value) return null;
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let i=0; i<binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], {type:'application/octet-stream'});
+}
+
+async function exportBackup() {
+  const button = $('#exportBtn');
+  const previous = button?.textContent;
+  if (button) { button.disabled = true; button.textContent = 'Preparando…'; }
+  try {
+    const photos = [];
+    for (const photo of state.photos) {
+      const meta = {...photo};
+      delete meta.blob;
+      delete meta.thumbBlob;
+      if (photo.encryptedBlob) meta.encryptedBlobBase64 = await blobToBase64(photo.encryptedBlob);
+      if (photo.thumbEncryptedBlob) meta.thumbEncryptedBlobBase64 = await blobToBase64(photo.thumbEncryptedBlob);
+      if (photo.bundled && photo.encryptedAsset && !meta.encryptedBlobBase64) {
+        const originalResponse = await fetch(photo.assetUrl, {cache:'force-cache'});
+        const thumbResponse = await fetch(photo.thumbAssetUrl, {cache:'force-cache'});
+        if (originalResponse.ok) meta.encryptedBlobBase64 = await blobToBase64(await originalResponse.blob());
+        if (thumbResponse.ok) meta.thumbEncryptedBlobBase64 = await blobToBase64(await thumbResponse.blob());
+        meta.localIv = photo.iv;
+        meta.localAad = photo.aad;
+        meta.thumbLocalIv = photo.thumbIv;
+        meta.thumbLocalAad = photo.thumbAad;
+        meta.thumbType = 'image/webp';
+        meta.backupContainsBundledCipher = true;
+      }
+      delete meta.encryptedBlob;
+      delete meta.thumbEncryptedBlob;
+      photos.push(meta);
+    }
+    const data = {
+      format:'memorias-em-familia-backup',
+      version:3,
+      encrypted:true,
+      exportedAt:new Date().toISOString(),
+      albums:state.albums,
+      photos,
+      note:'Fotos adicionadas localmente permanecem criptografadas. Fotos incluídas no app são restauradas pelo cofre do projeto.'
+    };
+    const blob = new Blob([JSON.stringify(data,null,2)], {type:'application/json'});
+    const a=document.createElement('a');
+    a.href=urlForBlob(blob);
+    a.download=`memorias-backup-criptografado-${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+    toast('Backup criptografado exportado.');
+  } catch (err) {
+    console.error(err);
+    toast('Não foi possível criar o backup completo.', 3800);
+  } finally {
+    if (button) { button.disabled = false; button.textContent = previous || 'Exportar backup'; }
+  }
+}
+
+async function importBackupFile(file) {
+  if (!file) return;
+  try {
+    const data = JSON.parse(await file.text());
+    if (data?.format !== 'memorias-em-familia-backup' || !Array.isArray(data.albums) || !Array.isArray(data.photos)) {
+      throw new Error('Arquivo de backup incompatível.');
+    }
+    if (!confirm(`Restaurar ${data.photos.length} registros de foto e ${data.albums.length} álbuns? Os dados existentes com o mesmo ID serão atualizados.`)) return;
+    for (const album of data.albums) await idbPut(ALBUM_STORE, album);
+    for (const raw of data.photos) {
+      const photo = {...raw};
+      if (photo.encryptedBlobBase64) photo.encryptedBlob = base64ToBlob(photo.encryptedBlobBase64);
+      if (photo.thumbEncryptedBlobBase64) photo.thumbEncryptedBlob = base64ToBlob(photo.thumbEncryptedBlobBase64);
+      if (photo.encryptedBlob || photo.thumbEncryptedBlob) photo.encryptedLocal = true;
+      delete photo.encryptedBlobBase64;
+      delete photo.thumbEncryptedBlobBase64;
+      await idbPut(PHOTO_STORE, photo);
+    }
+    state.albums = await idbAll(ALBUM_STORE);
+    state.photos = await idbAll(PHOTO_STORE);
+    await importBundledFamilyPhotos();
+    await hydratePhotoThumbnails();
+    refreshAlbumSelect();
+    renderCurrent();
+    toast('Backup restaurado com sucesso.', 4200);
+  } catch (err) {
+    console.error(err);
+    toast(err?.message || 'Não foi possível restaurar o backup.', 4200);
+  } finally {
+    $('#backupFileInput').value = '';
+  }
 }
 
 function applyTheme(theme) {
@@ -799,16 +1496,18 @@ function resetEditorControls() {
   $('#cropAspect').value = 'original';
   $('#frameMode').value = 'blur';
   $('#fillBlur').value = 28;
-  for (const [id,val] of [['cropX',50],['cropY',50],['brightness',100],['contrast',100],['saturation',100],['grayscale',0]]) $('#'+id).value = val;
+  for (const [id,val] of [['cropX',50],['cropY',50],['brightness',100],['contrast',100],['saturation',100],['noiseReduction',0],['sharpness',0],['warmth',0],['grayscale',0]]) $('#'+id).value = val;
+  $('#upscaleMode').value = '1';
   updateEditorOutputs();
   updateFrameControls();
 }
 
 function updateEditorOutputs() {
-  for (const id of ['cropX','cropY','brightness','contrast','saturation','grayscale']) {
+  for (const id of ['cropX','cropY','brightness','contrast','saturation','noiseReduction','sharpness','grayscale']) {
     const out = $('#'+id+'Out');
     if (out) out.textContent = `${$('#'+id).value}%`;
   }
+  if ($('#warmthOut')) $('#warmthOut').textContent = `${Number($('#warmth').value) > 0 ? '+' : ''}${$('#warmth').value}`;
   if ($('#fillBlurOut')) $('#fillBlurOut').textContent = `${$('#fillBlur').value}px`;
 }
 
@@ -909,7 +1608,67 @@ function drawMirroredPanel(ctx, sourceCanvas, side, barSize, offsetX, offsetY, t
   ctx.restore();
 }
 
-function drawEditedCanvas(canvas, maxDimension=1100) {
+function applyEditorPostProcessing(canvas) {
+  const ctx = canvas.getContext('2d');
+  const noise = Number($('#noiseReduction')?.value || 0) / 100;
+  const sharp = Number($('#sharpness')?.value || 0) / 100;
+  const warmth = Number($('#warmth')?.value || 0) / 50;
+
+  if (noise > 0) {
+    const copy = document.createElement('canvas');
+    copy.width = canvas.width; copy.height = canvas.height;
+    copy.getContext('2d').drawImage(canvas,0,0);
+    ctx.save();
+    ctx.globalAlpha = Math.min(.48, noise * .44);
+    ctx.filter = `blur(${(.35 + noise * 1.6).toFixed(2)}px)`;
+    ctx.drawImage(copy,0,0);
+    ctx.restore();
+  }
+
+  if (warmth !== 0) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'soft-light';
+    ctx.globalAlpha = Math.min(.20, Math.abs(warmth) * .16);
+    ctx.fillStyle = warmth > 0 ? '#ff8a4c' : '#5aa9ff';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.restore();
+  }
+
+  if (sharp > 0 && canvas.width * canvas.height <= 4200000) {
+    try {
+      const image = ctx.getImageData(0,0,canvas.width,canvas.height);
+      const src = new Uint8ClampedArray(image.data);
+      const dst = image.data;
+      const w = canvas.width, h = canvas.height;
+      const a = Math.min(.32, sharp * .28);
+      for (let y=1; y<h-1; y++) {
+        for (let x=1; x<w-1; x++) {
+          const i=(y*w+x)*4;
+          const u=((y-1)*w+x)*4, d=((y+1)*w+x)*4, l=(y*w+x-1)*4, r=(y*w+x+1)*4;
+          for (let c=0;c<3;c++) {
+            const v=src[i+c]*(1+4*a)-a*(src[u+c]+src[d+c]+src[l+c]+src[r+c]);
+            dst[i+c]=Math.max(0,Math.min(255,v));
+          }
+        }
+      }
+      ctx.putImageData(image,0,0);
+    } catch (_) {}
+  }
+}
+
+function autoEnhanceEditor() {
+  $('#brightness').value = 104;
+  $('#contrast').value = 108;
+  $('#saturation').value = 108;
+  $('#noiseReduction').value = 22;
+  $('#sharpness').value = 20;
+  $('#warmth').value = 4;
+  updateEditorOutputs();
+  renderEditorPreview();
+  toast('Auto melhoria aplicada na prévia.');
+}
+
+function drawEditedCanvas(canvas, maxDimension=1100, exportMode=false) {
   if (!editorState.source) return;
   const rawAspect = $('#cropAspect').value;
   const frameMode = $('#frameMode')?.value || 'crop';
@@ -924,7 +1683,8 @@ function drawEditedCanvas(canvas, maxDimension=1100) {
     const crop = currentCropRect();
     const naturalOutW = rotated ? crop.h : crop.w;
     const naturalOutH = rotated ? crop.w : crop.h;
-    const scale = Math.min(1, maxDimension / Math.max(naturalOutW, naturalOutH));
+    const multiplier = exportMode ? Number($('#upscaleMode')?.value || 1) : 1;
+    const scale = Math.min(multiplier, maxDimension / Math.max(naturalOutW, naturalOutH));
     const outW = Math.max(1, Math.round(naturalOutW * scale));
     const outH = Math.max(1, Math.round(naturalOutH * scale));
     canvas.width = outW;
@@ -942,6 +1702,7 @@ function drawEditedCanvas(canvas, maxDimension=1100) {
     const drawH = crop.h * scale;
     ctx.drawImage(editorState.source, crop.x, crop.y, crop.w, crop.h, -drawW/2, -drawH/2, drawW, drawH);
     ctx.restore();
+    applyEditorPostProcessing(canvas);
     return;
   }
 
@@ -956,7 +1717,8 @@ function drawEditedCanvas(canvas, maxDimension=1100) {
     naturalOutH = orientedH;
     naturalOutW = orientedH * targetAspect;
   }
-  const outputScale = Math.min(1, maxDimension / Math.max(naturalOutW, naturalOutH));
+  const multiplier = exportMode ? Number($('#upscaleMode')?.value || 1) : 1;
+  const outputScale = Math.min(multiplier, maxDimension / Math.max(naturalOutW, naturalOutH));
   const outW = Math.max(1, Math.round(naturalOutW * outputScale));
   const outH = Math.max(1, Math.round(naturalOutH * outputScale));
   canvas.width = outW;
@@ -1026,6 +1788,7 @@ function drawEditedCanvas(canvas, maxDimension=1100) {
     scale: containScale,
     filter: editorFilter(),
   });
+  applyEditorPostProcessing(canvas);
 }
 
 function renderEditorPreview() {
@@ -1079,7 +1842,7 @@ async function saveEditedCopy() {
   $('#saveEditBtn').textContent = 'Salvando…';
   try {
     const canvas = document.createElement('canvas');
-    drawEditedCanvas(canvas, 4096);
+    drawEditedCanvas(canvas, 8192, true);
     const out = editorOutputType(sourcePhoto);
     const blob = await canvasToBlob(canvas, out.type, out.quality);
     let thumbBlob = null;
@@ -1088,17 +1851,27 @@ async function saveEditedCopy() {
     const base = (sourcePhoto.name || 'Foto').replace(/\s+-\s+editada(?:\s+\d+)?$/i,'');
     const existingEdits = state.photos.filter(p=>p.editedFrom === (sourcePhoto.editedFrom || sourcePhoto.id)).length;
     const suffix = existingEdits ? ` - editada ${existingEdits+1}` : ' - editada';
+    const newId = uid('photo');
+    const encryptedOriginal = await window.MemVault.encryptBlob(blob, newId, 'original');
+    const encryptedThumb = thumbBlob ? await window.MemVault.encryptBlob(thumbBlob, newId, 'thumb') : null;
     const copy = {
       ...sourcePhoto,
-      id: uid('photo'),
+      id: newId,
       name: `${base}${suffix}`,
-      filename: `${base}${suffix}.${out.ext}`.replace(/[\\/:*?"<>|]/g,'-'),
+      filename: `${base}${suffix}.${out.ext}`.replace(/[\/:*?"<>|]/g,'-'),
       type: out.type,
       size: blob.size,
-      blob,
-      thumbBlob,
+      encryptedBlob: encryptedOriginal.blob,
+      localIv: encryptedOriginal.iv,
+      localAad: encryptedOriginal.aad,
+      thumbEncryptedBlob: encryptedThumb?.blob || null,
+      thumbType: thumbBlob?.type || null,
+      thumbLocalIv: encryptedThumb?.iv || null,
+      thumbLocalAad: encryptedThumb?.aad || null,
+      encryptedLocal:true,
       assetUrl:null,
-      thumbUrl:null,
+      thumbAssetUrl:null,
+      encryptedAsset:false,
       bundled:false,
       bundleVersion:null,
       previewUnsupported:false,
@@ -1120,11 +1893,16 @@ async function saveEditedCopy() {
         brightness: Number($('#brightness').value),
         contrast: Number($('#contrast').value),
         saturation: Number($('#saturation').value),
+        noiseReduction: Number($('#noiseReduction').value),
+        sharpness: Number($('#sharpness').value),
+        warmth: Number($('#warmth').value),
+        upscale: Number($('#upscaleMode').value),
         grayscale: Number($('#grayscale').value),
       }
     };
     await idbPut(PHOTO_STORE, copy);
     state.photos.push(copy);
+    if (thumbBlob) runtimeMediaUrls.set(`t:${copy.id}`, urlForBlob(thumbBlob));
     $('#editorDialog').close();
     cleanupEditor();
     renderCurrent();
@@ -1392,19 +2170,41 @@ function initializeRadio() {
 // Navegação e ações gerais
 addEventListener('click', async (e) => {
   const nav = e.target.closest('[data-view]');
-  if (nav) { state.view=nav.dataset.view; $('#sidebar').classList.remove('open'); renderCurrent(); return; }
+  if (nav) { state.view=nav.dataset.view; state.selectionMode=false; state.selectedIds.clear(); state.momentFilter='all'; $('#sidebar').classList.remove('open'); renderCurrent(); return; }
   const viewLink = e.target.closest('[data-view-link]');
-  if (viewLink) { state.view=viewLink.dataset.viewLink; renderCurrent(); return; }
+  if (viewLink) { state.view=viewLink.dataset.viewLink; state.selectionMode=false; state.selectedIds.clear(); state.momentFilter='all'; renderCurrent(); return; }
   const uploadAction = e.target.closest('[data-action="upload"]');
   if (uploadAction) { openUploadDialog(); return; }
   const albumAction = e.target.closest('[data-action="album"]');
   if (albumAction) { $('#albumDialog').showModal(); return; }
+  const coverEdit = e.target.closest('[data-edit-album-cover]');
+  if (coverEdit) { e.preventDefault(); e.stopPropagation(); openAlbumCoverEditor(coverEdit.dataset.editAlbumCover); return; }
+  const albumSlideshow = e.target.closest('[data-start-album-slideshow]');
+  if (albumSlideshow) { e.preventDefault(); e.stopPropagation(); startAlbumSlideshow(albumSlideshow.dataset.startAlbumSlideshow); return; }
+  const viewSlideshow = e.target.closest('[data-start-view-slideshow]');
+  if (viewSlideshow) { e.preventDefault(); startViewSlideshow(); return; }
+  const homeDot = e.target.closest('[data-home-slide]');
+  if (homeDot) { e.preventDefault(); e.stopPropagation(); setHomeCarouselSlide(Number(homeDot.dataset.homeSlide)); return; }
+  const manageAlbum = e.target.closest('[data-manage-album]');
+  if (manageAlbum) { e.preventDefault(); e.stopPropagation(); openAlbumManager(manageAlbum.dataset.manageAlbum); return; }
+  const galleryMode = e.target.closest('[data-gallery-mode]');
+  if (galleryMode) { state.galleryMode=galleryMode.dataset.galleryMode; localStorage.setItem('memorias-gallery-mode', state.galleryMode); renderCurrent(); return; }
+  const momentFilter = e.target.closest('[data-moment-filter]');
+  if (momentFilter) { state.momentFilter=momentFilter.dataset.momentFilter; renderCurrent(); return; }
+  const selectionToggle = e.target.closest('[data-toggle-selection]');
+  if (selectionToggle) { state.selectionMode=!state.selectionMode; if(!state.selectionMode) state.selectedIds.clear(); renderCurrent(); return; }
+  const selectPhoto = e.target.closest('[data-select-photo]');
+  if (selectPhoto) { e.preventDefault(); e.stopPropagation(); togglePhotoSelection(selectPhoto.dataset.selectPhoto); return; }
+  const bulkAction = e.target.closest('[data-bulk-action]');
+  if (bulkAction) { e.preventDefault(); await handleBulkAction(bulkAction.dataset.bulkAction); return; }
   const albumCard = e.target.closest('[data-album-id]');
-  if (albumCard) { state.view=`album:${albumCard.dataset.albumId}`; renderCurrent(); return; }
+  if (albumCard) { state.view=`album:${albumCard.dataset.albumId}`; state.momentFilter='all'; state.selectionMode=false; state.selectedIds.clear(); renderCurrent(); return; }
   const fav = e.target.closest('[data-favorite-id]');
   if (fav) { e.stopPropagation(); await toggleFavorite(fav.dataset.favoriteId); return; }
   const photoCard = e.target.closest('[data-photo-id]');
-  if (photoCard) { openLightbox(photoCard.dataset.photoId); return; }
+  if (photoCard) { if (state.selectionMode) togglePhotoSelection(photoCard.dataset.photoId); else openLightbox(photoCard.dataset.photoId); return; }
+  const coverChoice = e.target.closest('[data-cover-choice]');
+  if (coverChoice) { coverEditorState.selectedPhotoId = coverChoice.dataset.coverChoice; renderAlbumCoverEditor(); return; }
   const removeUpload = e.target.closest('[data-remove-upload]');
   if (removeUpload) { state.uploadFiles.splice(Number(removeUpload.dataset.removeUpload),1); renderUploadPreview(); return; }
   const trash = e.target.closest('[data-trash-id]');
@@ -1477,23 +2277,80 @@ $('#saveAlbumBtn').addEventListener('click', async e=>{
   e.preventDefault();
   if(await createAlbum()) $('#albumDialog').close();
 });
+$('#saveAlbumManageBtn').addEventListener('click', saveAlbumManage);
+$('#deleteAlbumBtn').addEventListener('click', deleteManagedAlbum);
+$('#confirmMovePhotosBtn').addEventListener('click', confirmMovePhotos);
+$('#savePhotoMomentBtn').addEventListener('click', savePhotoMoment);
 
-$('#lightboxClose').addEventListener('click', ()=>$('#lightbox').close());
-$('#lightboxPrev').addEventListener('click', ()=>moveLightbox(-1));
-$('#lightboxNext').addEventListener('click', ()=>moveLightbox(1));
+$('#lightboxClose').addEventListener('click', ()=>{ setSlideshowPlaying(false); $('#lightbox').close(); });
+$('#lightboxPrev').addEventListener('click', ()=>{ if (galleryUiState.slideshowPlaying) setSlideshowPlaying(false); transitionLightbox(-1); });
+$('#lightboxNext').addEventListener('click', ()=>{ if (galleryUiState.slideshowPlaying) setSlideshowPlaying(false); transitionLightbox(1); });
 $('#lightboxFavorite').addEventListener('click', ()=>toggleFavorite(currentLightboxPhoto()?.id));
 $('#lightboxEdit').addEventListener('click', ()=>openEditor(currentLightboxPhoto()));
+$('#lightboxInfo').addEventListener('click', ()=>openPhotoInfo(currentLightboxPhoto()));
+$('#lightboxMove').addEventListener('click', ()=>openMovePhotos([currentLightboxPhoto()?.id]));
+$('#lightboxShare').addEventListener('click', ()=>sharePhoto(currentLightboxPhoto()));
 $('#lightboxDownload').addEventListener('click', ()=>{ const p=currentLightboxPhoto(); if(p) downloadPhoto(p); });
 $('#lightboxDelete').addEventListener('click', async ()=>{ const p=currentLightboxPhoto(); if(!p)return; await softDelete(p.id); $('#lightbox').close(); });
+$('#lightboxSlideshow').addEventListener('click', ()=>setSlideshowPlaying(!galleryUiState.slideshowPlaying));
+$('#lightbox').addEventListener('close', ()=>setSlideshowPlaying(false));
 
 addEventListener('keydown', e=>{
   if(!$('#lightbox').open) return;
-  if(e.key==='ArrowLeft') moveLightbox(-1);
-  if(e.key==='ArrowRight') moveLightbox(1);
+  if(e.key==='ArrowLeft') { if (galleryUiState.slideshowPlaying) setSlideshowPlaying(false); transitionLightbox(-1); }
+  if(e.key==='ArrowRight') { if (galleryUiState.slideshowPlaying) setSlideshowPlaying(false); transitionLightbox(1); }
+  if(e.key===' ') { e.preventDefault(); setSlideshowPlaying(!galleryUiState.slideshowPlaying); }
 });
 
+let lightboxTouchStartX = 0;
+let lightboxTouchStartY = 0;
+let lightboxPinchDistance = 0;
+let lightboxZoom = 1;
+function lightboxDistance(touches) {
+  if (touches.length < 2) return 0;
+  const dx = touches[0].clientX - touches[1].clientX;
+  const dy = touches[0].clientY - touches[1].clientY;
+  return Math.hypot(dx,dy);
+}
+function applyLightboxZoom(value) {
+  lightboxZoom = Math.max(1, Math.min(4, value));
+  $('#lightboxImage').style.transform = `scale(${lightboxZoom})`;
+  $('#lightboxImage').classList.toggle('is-zoomed', lightboxZoom > 1.02);
+}
+$('#lightbox').addEventListener('touchstart', e=>{
+  if (e.touches.length === 1) {
+    lightboxTouchStartX = e.touches[0].clientX;
+    lightboxTouchStartY = e.touches[0].clientY;
+  } else if (e.touches.length === 2) {
+    lightboxPinchDistance = lightboxDistance(e.touches);
+  }
+}, {passive:true});
+$('#lightbox').addEventListener('touchmove', e=>{
+  if (e.touches.length === 2 && lightboxPinchDistance) {
+    const current = lightboxDistance(e.touches);
+    applyLightboxZoom(lightboxZoom * (current / lightboxPinchDistance));
+    lightboxPinchDistance = current;
+  }
+}, {passive:true});
+$('#lightbox').addEventListener('touchend', e=>{
+  if (e.touches.length === 0 && e.changedTouches.length === 1 && lightboxZoom <= 1.02) {
+    const dx = e.changedTouches[0].clientX - lightboxTouchStartX;
+    const dy = e.changedTouches[0].clientY - lightboxTouchStartY;
+    if (Math.abs(dx) > 55 && Math.abs(dx) > Math.abs(dy) * 1.25) transitionLightbox(dx < 0 ? 1 : -1);
+  }
+  if (e.touches.length < 2) lightboxPinchDistance = 0;
+}, {passive:true});
+$('#lightboxImage').addEventListener('dblclick', ()=>applyLightboxZoom(lightboxZoom > 1 ? 1 : 2));
+$('#lightbox').addEventListener('close', ()=>applyLightboxZoom(1));
+
+// Capa de álbum
+for (const id of ['coverPositionX','coverPositionY','coverZoom']) {
+  $('#'+id).addEventListener('input', updateAlbumCoverPreviewStyle);
+}
+$('#saveAlbumCoverBtn').addEventListener('click', saveAlbumCoverSettings);
+
 // Editor
-for (const id of ['cropAspect','frameMode','fillBlur','cropX','cropY','brightness','contrast','saturation','grayscale']) {
+for (const id of ['cropAspect','frameMode','fillBlur','cropX','cropY','brightness','contrast','saturation','noiseReduction','sharpness','warmth','upscaleMode','grayscale']) {
   $('#'+id).addEventListener('input', () => { updateFrameControls(); renderEditorPreview(); });
   $('#'+id).addEventListener('change', () => { updateFrameControls(); renderEditorPreview(); });
 }
@@ -1501,18 +2358,89 @@ $('#rotateLeftBtn').addEventListener('click', ()=>{ editorState.rotation=(editor
 $('#rotateRightBtn').addEventListener('click', ()=>{ editorState.rotation=(editorState.rotation+90)%360; renderEditorPreview(); });
 $('#flipHBtn').addEventListener('click', ()=>{ editorState.flipX=!editorState.flipX; $('#flipHBtn').classList.toggle('active',editorState.flipX); renderEditorPreview(); });
 $('#flipVBtn').addEventListener('click', ()=>{ editorState.flipY=!editorState.flipY; $('#flipVBtn').classList.toggle('active',editorState.flipY); renderEditorPreview(); });
+$('#autoEnhanceBtn').addEventListener('click', autoEnhanceEditor);
 $('#resetEditBtn').addEventListener('click', ()=>{ resetEditorControls(); $('#flipHBtn').classList.remove('active'); $('#flipVBtn').classList.remove('active'); renderEditorPreview(); });
 $('#saveEditBtn').addEventListener('click', saveEditedCopy);
 $('#editorDialog').addEventListener('close', cleanupEditor);
 
 $('#themeSwitch').addEventListener('click', ()=>applyTheme(document.documentElement.dataset.theme==='dark'?'light':'dark'));
 $('#exportBtn').addEventListener('click', exportBackup);
+$('#importBackupBtn').addEventListener('click', ()=>$('#backupFileInput').click());
+$('#backupFileInput').addEventListener('change', e=>importBackupFile(e.target.files?.[0]));
+$('#settingsLockBtn').addEventListener('click', ()=>$('#lockVaultBtn').click());
+$('#slideshowSpeed').value = localStorage.getItem('memorias-slideshow-speed') || '4200';
+$('#slideshowEffect').value = localStorage.getItem('memorias-slideshow-effect') || 'kenburns';
+$('#slideshowSpeed').addEventListener('change', e=>localStorage.setItem('memorias-slideshow-speed', e.target.value));
+$('#slideshowEffect').addEventListener('change', e=>localStorage.setItem('memorias-slideshow-effect', e.target.value));
+$('#autoLockMinutes').value = localStorage.getItem('memorias-auto-lock') || '15';
+$('#autoLockMinutes').addEventListener('change', e=>{ localStorage.setItem('memorias-auto-lock', e.target.value); resetAutoLockTimer(); });
+
+let autoLockTimer = null;
+function resetAutoLockTimer() {
+  clearTimeout(autoLockTimer);
+  if (!window.MemVault?.isUnlocked()) return;
+  const minutes = Number(localStorage.getItem('memorias-auto-lock') || 15);
+  if (!minutes) return;
+  autoLockTimer = setTimeout(()=>{
+    try { $('#radioAudio')?.pause(); } catch (_) {}
+    window.MemVault?.clearSession();
+    location.reload();
+  }, minutes * 60 * 1000);
+}
+for (const eventName of ['pointerdown','keydown','touchstart']) {
+  addEventListener(eventName, resetAutoLockTimer, {passive:true});
+}
 
 applyTheme(localStorage.getItem('memorias-theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
-initializeRadio();
-loadState().catch(err=>{
+
+async function unlockProtectedApp(password) {
+  const card = $('.vault-card');
+  const status = $('#vaultStatus');
+  const button = $('#vaultUnlockBtn');
+  card?.classList.add('is-busy');
+  if (button) button.textContent = 'Verificando…';
+  if (status) { status.textContent = 'Derivando a chave de criptografia…'; status.className = 'vault-status'; }
+  try {
+    await window.MemVault.loadManifest();
+    await window.MemVault.unlock(password);
+    if (status) { status.textContent = 'Cofre desbloqueado com segurança.'; status.className = 'vault-status success'; }
+    document.body.classList.remove('vault-locked');
+    $('#vaultPassword').value = '';
+    initializeRadio();
+    const requestedView = new URLSearchParams(location.search).get('view');
+    if (['home','photos','albums','favorites','trash'].includes(requestedView)) state.view = requestedView;
+    await loadState();
+    resetAutoLockTimer();
+    requestAnimationFrame(()=>$('#searchInput')?.focus({preventScroll:true}));
+  } catch (err) {
+    console.error(err);
+    if (status) { status.textContent = err?.message || 'Não foi possível desbloquear o acervo.'; status.className = 'vault-status error'; }
+    $('#vaultPassword')?.focus();
+  } finally {
+    card?.classList.remove('is-busy');
+    if (button) button.textContent = 'Desbloquear acervo';
+  }
+}
+
+$('#vaultUnlockForm').addEventListener('submit', e => {
+  e.preventDefault();
+  unlockProtectedApp($('#vaultPassword').value);
+});
+$('#vaultTogglePassword').addEventListener('click', () => {
+  const input = $('#vaultPassword');
+  input.type = input.type === 'password' ? 'text' : 'password';
+  $('#vaultTogglePassword').textContent = input.type === 'password' ? '◉' : '◌';
+});
+$('#lockVaultBtn').addEventListener('click', () => {
+  try { $('#radioAudio')?.pause(); } catch (_) {}
+  window.MemVault?.clearSession();
+  location.reload();
+});
+
+window.MemVault?.loadManifest().catch(err => {
   console.error(err);
-  root.innerHTML=renderEmpty('Não foi possível abrir o armazenamento', 'Seu navegador pode estar bloqueando o IndexedDB. Tente abrir o site em uma janela normal.');
+  const status = $('#vaultStatus');
+  if (status) { status.textContent = 'Não foi possível carregar o cofre protegido.'; status.className = 'vault-status error'; }
 });
 
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
