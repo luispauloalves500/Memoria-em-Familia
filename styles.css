@@ -1593,3 +1593,8 @@ body:not(.vault-locked) .vault-gate { display: none; }
 .compact-settings { width:100%; margin-top:0; }
 .compact-settings label { margin-top:0; }
 .timeline-item.selected { border-color:var(--primary); box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 16%,transparent), 0 12px 30px rgba(22,27,45,.06); }
+
+
+/* v2.1 — separação visual dos conjuntos do casamento */
+.filter-divider { width:1px; min-height:30px; background:var(--border); margin:0 2px; align-self:center; }
+@media (max-width:560px){ .filter-divider{ display:none; } }

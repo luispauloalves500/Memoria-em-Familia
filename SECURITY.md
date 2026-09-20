@@ -6,7 +6,7 @@ A senha **não é gravada** no HTML, JavaScript, `localStorage`, manifesto PWA o
 
 O navegador usa a senha apenas em memória para derivar uma chave com **PBKDF2-SHA256 (350.000 iterações)**. Essa chave abre o cofre **AES-256-GCM**. Ao bloquear ou recarregar a página, a chave em memória é descartada e a senha precisa ser digitada novamente.
 
-As 70 fotos do casamento e as miniaturas estão publicadas apenas como arquivos `.bin` criptografados. Abrir a URL direta de um desses arquivos não revela a foto.
+As 409 fotos do casamento e as miniaturas estão publicadas apenas como arquivos `.bin` criptografados. Abrir a URL direta de um desses arquivos não revela a foto.
 
 ## O que continua público em hospedagem estática
 

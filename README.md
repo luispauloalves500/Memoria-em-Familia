@@ -1,13 +1,13 @@
-# Memórias em Família — v2.0.0 Secure
+# Memórias em Família — v2.1.0 Secure
 
-Galeria/PWA privada para organizar, editar e rever fotos da família. Esta versão transforma o projeto em um **cofre criptografado** e mantém o álbum de casamento com 70 fotos.
+Galeria/PWA privada para organizar, editar e rever fotos da família. Esta versão transforma o projeto em um **cofre criptografado** e mantém o álbum de casamento com 409 fotos.
 
 ## Segurança
 
 - Senha **não fica gravada** no HTML, JavaScript, `localStorage`, manifesto ou repositório.
 - PBKDF2-SHA256 com 350.000 iterações para derivação de chave.
 - AES-256-GCM para as fotos e miniaturas do casamento.
-- As 70 fotos públicas do projeto foram removidas e substituídas por arquivos `.bin` criptografados.
+- As 409 fotos públicas do projeto foram removidas e substituídas por arquivos `.bin` criptografados.
 - Fotos adicionadas pelo navegador também são criptografadas antes de irem para o IndexedDB.
 - Bloqueio manual e bloqueio automático por inatividade.
 - Política CSP restringindo scripts e conteúdo ativo.
@@ -15,7 +15,7 @@ Galeria/PWA privada para organizar, editar e rever fotos da família. Esta vers�
 
 ## Galeria e casamento
 
-- 70 fotos no álbum **Casamento**.
+- 409 fotos no álbum **Casamento**.
 - Miniaturas reais e leves (as originais só são descriptografadas quando necessário).
 - Banner/carrossel automático na home.
 - Banner interno do álbum.
@@ -76,3 +76,8 @@ Galeria/PWA privada para organizar, editar e rever fotos da família. Esta vers�
 Envie o conteúdo desta pasta para o repositório e habilite **Settings > Pages**. O GitHub Pages continuará sendo uma hospedagem estática; a proteção das fotos nesta versão vem da criptografia do próprio arquivo, não de uma senha escondida em JavaScript.
 
 **Importante:** não adicione novamente as fotos originais em uma pasta pública do repositório. Use somente `assets/vault/` para o acervo incluído.
+
+
+## Acervo v2.1
+
+O álbum **Casamento** agora contém 409 fotos protegidas. As 339 novas imagens foram mantidas em três conjuntos físicos separados e criptografados: **Lote 6 (20)**, **Lote 7 (20)** e **Casamento extra (299)**. O acervo original de 70 fotos foi preservado. O site oferece filtros por conjunto dentro do álbum Casamento.

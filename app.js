@@ -4,7 +4,7 @@ const PHOTO_STORE = 'photos';
 const ALBUM_STORE = 'albums';
 
 const BUNDLED_MANIFEST_URL = './assets/vault/manifest.json';
-const BUNDLED_IMPORT_KEY = 'memorias-bundled-casamento-v3-secure';
+const BUNDLED_IMPORT_KEY = 'memorias-bundled-casamento-v4-secure';
 const assetBlobCache = new Map();
 const runtimeMediaUrls = new Map();
 
@@ -22,6 +22,7 @@ const state = {
   selectedIds: new Set(),
   galleryMode: localStorage.getItem('memorias-gallery-mode') || 'grid',
   momentFilter: 'all',
+  sourceFilter: 'all',
 };
 
 const editorState = {
@@ -531,7 +532,9 @@ function selectionToolbar() {
 function renderPhotoView(title, subtitle, list, opts={}) {
   let filtered = sorted(list.filter(photoMatches));
   const isWedding = opts.album?.name?.toLowerCase().includes('casamento');
+  const sourceGroups = isWedding ? [...new Map(list.filter(p=>p.sourceFolder).map(p=>[p.sourceFolder, p.sourceLabel || p.sourceFolder])).entries()] : [];
   if (isWedding && state.momentFilter !== 'all') filtered = filtered.filter(p => p.moment === state.momentFilter);
+  if (isWedding && state.sourceFilter !== 'all') filtered = filtered.filter(p => p.sourceFolder === state.sourceFilter);
   const albumHero = opts.album ? renderAlbumHero(opts.album, filtered) : '';
   const viewMarkup = state.galleryMode === 'timeline' ? renderTimeline(filtered) : `<div class="photo-grid">${filtered.map(renderPhotoCard).join('')}</div>`;
   root.innerHTML = `
@@ -542,7 +545,8 @@ function renderPhotoView(title, subtitle, list, opts={}) {
       <div class="filter-row">
         ${opts.backAlbum ? `<button class="chip" data-view-link="albums">← Álbuns</button>` : ''}
         <span class="chip active">${filtered.length} ${filtered.length===1?'foto':'fotos'}</span>
-        ${isWedding ? `<button class="chip ${state.momentFilter==='all'?'active':''}" data-moment-filter="all">Todos</button>${WEDDING_MOMENTS.map(m=>`<button class="chip ${state.momentFilter===m?'active':''}" data-moment-filter="${m}">${m}</button>`).join('')}` : ''}
+        ${isWedding ? `<button class="chip ${state.momentFilter==='all'?'active':''}" data-moment-filter="all">Todos momentos</button>${WEDDING_MOMENTS.map(m=>`<button class="chip ${state.momentFilter===m?'active':''}" data-moment-filter="${m}">${m}</button>`).join('')}` : ''}
+        ${isWedding && sourceGroups.length > 1 ? `<span class="filter-divider"></span><button class="chip ${state.sourceFilter==='all'?'active':''}" data-source-filter="all">Todos conjuntos</button>${sourceGroups.map(([id,label])=>`<button class="chip ${state.sourceFilter===id?'active':''}" data-source-filter="${escapeHtml(id)}">${escapeHtml(label)}</button>`).join('')}` : ''}
       </div>
       <div class="toolbar-actions">
         <button class="chip ${state.galleryMode==='grid'?'active':''}" data-gallery-mode="grid">▦ Grade</button>
@@ -742,10 +746,12 @@ async function importBundledFamilyPhotos() {
           thumbAad: item.thumbAad,
           previewUnsupported: false,
           albumId: album.id,
-          tags: [...new Set([...(existing.tags || []).filter(t => !/^lote-/i.test(t)), 'casamento', 'família'])],
+          tags: [...new Set([...(existing.tags || []).filter(t => !/^lote-/i.test(t)), 'casamento', 'família', item.sourceLabel || item.sourceFolder || 'acervo original'])],
           bundled: true,
-          bundleVersion: manifest.version || '2.0.0-secure',
-          sourceLot: null,
+          bundleVersion: manifest.version || '2.1.0-secure',
+          sourceFolder: item.sourceFolder || existing.sourceFolder || 'casamento-base',
+          sourceLabel: item.sourceLabel || existing.sourceLabel || 'Acervo original',
+          sourceLot: item.sourceFolder || existing.sourceLot || 'casamento-base',
           event: 'Casamento',
           order: Number(item.order) || existing.order || null,
           updatedAt: new Date().toISOString(),
@@ -777,11 +783,13 @@ async function importBundledFamilyPhotos() {
         thumbAad: item.thumbAad,
         previewUnsupported: false,
         albumId: album.id,
-        tags: ['casamento', 'família'],
+        tags: ['casamento', 'família', item.sourceLabel || item.sourceFolder || 'acervo original'],
         favorite: false,
         bundled: true,
-        bundleVersion: manifest.version || '2.0.0-secure',
-        sourceLot: null,
+        bundleVersion: manifest.version || '2.1.0-secure',
+        sourceFolder: item.sourceFolder || 'casamento-base',
+        sourceLabel: item.sourceLabel || 'Acervo original',
+        sourceLot: item.sourceFolder || 'casamento-base',
         event: 'Casamento',
         order: Number(item.order) || i + 1,
         createdAt,
@@ -795,7 +803,7 @@ async function importBundledFamilyPhotos() {
       added++;
     }
 
-    localStorage.setItem(BUNDLED_IMPORT_KEY, manifest.version || '2.0.0-secure');
+    localStorage.setItem(BUNDLED_IMPORT_KEY, manifest.version || '2.1.0-secure');
     if (added || migrated) toast(`${photos.length} fotos organizadas no álbum Casamento.`, 4200);
     return added > 0 || migrated > 0;
   } catch (err) {
@@ -2170,9 +2178,9 @@ function initializeRadio() {
 // Navegação e ações gerais
 addEventListener('click', async (e) => {
   const nav = e.target.closest('[data-view]');
-  if (nav) { state.view=nav.dataset.view; state.selectionMode=false; state.selectedIds.clear(); state.momentFilter='all'; $('#sidebar').classList.remove('open'); renderCurrent(); return; }
+  if (nav) { state.view=nav.dataset.view; state.selectionMode=false; state.selectedIds.clear(); state.momentFilter='all'; state.sourceFilter='all'; $('#sidebar').classList.remove('open'); renderCurrent(); return; }
   const viewLink = e.target.closest('[data-view-link]');
-  if (viewLink) { state.view=viewLink.dataset.viewLink; state.selectionMode=false; state.selectedIds.clear(); state.momentFilter='all'; renderCurrent(); return; }
+  if (viewLink) { state.view=viewLink.dataset.viewLink; state.selectionMode=false; state.selectedIds.clear(); state.momentFilter='all'; state.sourceFilter='all'; renderCurrent(); return; }
   const uploadAction = e.target.closest('[data-action="upload"]');
   if (uploadAction) { openUploadDialog(); return; }
   const albumAction = e.target.closest('[data-action="album"]');
@@ -2191,6 +2199,8 @@ addEventListener('click', async (e) => {
   if (galleryMode) { state.galleryMode=galleryMode.dataset.galleryMode; localStorage.setItem('memorias-gallery-mode', state.galleryMode); renderCurrent(); return; }
   const momentFilter = e.target.closest('[data-moment-filter]');
   if (momentFilter) { state.momentFilter=momentFilter.dataset.momentFilter; renderCurrent(); return; }
+  const sourceFilter = e.target.closest('[data-source-filter]');
+  if (sourceFilter) { state.sourceFilter=sourceFilter.dataset.sourceFilter; renderCurrent(); return; }
   const selectionToggle = e.target.closest('[data-toggle-selection]');
   if (selectionToggle) { state.selectionMode=!state.selectionMode; if(!state.selectionMode) state.selectedIds.clear(); renderCurrent(); return; }
   const selectPhoto = e.target.closest('[data-select-photo]');
@@ -2198,7 +2208,7 @@ addEventListener('click', async (e) => {
   const bulkAction = e.target.closest('[data-bulk-action]');
   if (bulkAction) { e.preventDefault(); await handleBulkAction(bulkAction.dataset.bulkAction); return; }
   const albumCard = e.target.closest('[data-album-id]');
-  if (albumCard) { state.view=`album:${albumCard.dataset.albumId}`; state.momentFilter='all'; state.selectionMode=false; state.selectedIds.clear(); renderCurrent(); return; }
+  if (albumCard) { state.view=`album:${albumCard.dataset.albumId}`; state.momentFilter='all'; state.sourceFilter='all'; state.selectionMode=false; state.selectedIds.clear(); renderCurrent(); return; }
   const fav = e.target.closest('[data-favorite-id]');
   if (fav) { e.stopPropagation(); await toggleFavorite(fav.dataset.favoriteId); return; }
   const photoCard = e.target.closest('[data-photo-id]');

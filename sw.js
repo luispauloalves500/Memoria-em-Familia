@@ -1,5 +1,5 @@
-const CACHE_APP = 'memorias-familia-app-v2.0.0';
-const CACHE_MEDIA = 'memorias-familia-media-v2.0.0';
+const CACHE_APP = 'memorias-familia-app-v2.1.0';
+const CACHE_MEDIA = 'memorias-familia-media-v2.1.0';
 const APP_SHELL = [
   './', './index.html', './styles.css', './app.js', './vault.js', './manifest.webmanifest',
   './assets/vault/manifest.json',
